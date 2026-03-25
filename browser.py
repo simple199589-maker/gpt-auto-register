@@ -3,6 +3,9 @@
 使用 undetected-chromedriver 实现 ChatGPT 注册流程
 """
 
+import os
+import re
+import subprocess
 import time
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
@@ -42,6 +45,66 @@ class SafeChrome(uc.Chrome):
             pass
 
 
+def get_local_chrome_major_version():
+    """
+    检测本机 Chrome 主版本号。
+
+    返回:
+        int | None: Chrome 主版本号，检测失败时返回 None
+        AI by zb
+    """
+    chrome_paths = [
+        os.path.join(os.environ.get("PROGRAMFILES", ""), "Google", "Chrome", "Application", "chrome.exe"),
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "Application", "chrome.exe"),
+        os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "Google", "Chrome", "Application", "chrome.exe"),
+    ]
+
+    for chrome_path in chrome_paths:
+        if not chrome_path or not os.path.exists(chrome_path):
+            continue
+
+        try:
+            result = subprocess.run(
+                [
+                    "pwsh",
+                    "-NoLogo",
+                    "-Command",
+                    f'(Get-Item "{chrome_path}").VersionInfo.ProductVersion'
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+                encoding="utf-8",
+                errors="ignore"
+            )
+            output = (result.stdout or result.stderr or "").strip()
+            match = re.search(r"(\d+)\.\d+\.\d+\.\d+", output)
+            if match:
+                return int(match.group(1))
+        except Exception:
+            pass
+
+        try:
+            result = subprocess.run(
+                [chrome_path, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+                encoding="utf-8",
+                errors="ignore"
+            )
+            output = (result.stdout or result.stderr or "").strip()
+            match = re.search(r"(\d+)\.\d+\.\d+\.\d+", output)
+            if match:
+                return int(match.group(1))
+        except Exception:
+            continue
+
+    return None
+
+
 def create_driver(headless=False):
     """
     创建 undetected Chrome 浏览器驱动
@@ -71,9 +134,23 @@ def create_driver(headless=False):
         
         # 仍然可以加一些伪装，虽然不是必需的，因为已经是真浏览器了
         options.add_argument("--lang=zh-CN,zh;q=0.9,en;q=0.8")
-    
+
+    chrome_major_version = get_local_chrome_major_version()
+    if chrome_major_version:
+        print(f"🔍 检测到本机 Chrome 主版本: {chrome_major_version}")
+    else:
+        print("⚠️ 未能检测到本机 Chrome 主版本，将使用 undetected-chromedriver 默认匹配")
+
     # 使用自定义的 SafeChrome (注意: 传入 real_headless=False)
-    driver = SafeChrome(options=options, use_subprocess=True, headless=real_headless)
+    driver_kwargs = {
+        "options": options,
+        "use_subprocess": True,
+        "headless": real_headless,
+    }
+    if chrome_major_version:
+        driver_kwargs["version_main"] = chrome_major_version
+
+    driver = SafeChrome(**driver_kwargs)
     
     # === 深度伪装 (针对 Headless 模式) ===
     if headless:

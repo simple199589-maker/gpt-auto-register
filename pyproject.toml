@@ -3,7 +3,7 @@ name = "chatgpt-auto-register"
 version = "0.1.0"
 description = "Automated ChatGPT account registration and management tool using Selenium."
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
     "faker>=40.1.0",
     "flask>=3.1.2",

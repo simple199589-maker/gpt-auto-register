@@ -67,3 +67,12 @@ payment:
 # 文件路径配置
 files:
   accounts_file: "registered_accounts.txt"  # 注册成功账号的保存路径
+
+# ------------------------------------------------------------
+# Sub2Api 配置
+# ------------------------------------------------------------
+sub2api:
+  base_url: "http://localhost:8000"
+  api_key: "sub2 里面的管理员api-key"
+  auto_upload_sub2api: true
+  group_ids: [2]

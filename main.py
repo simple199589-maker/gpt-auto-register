@@ -25,7 +25,11 @@ from config import (
     BATCH_INTERVAL_MAX
 )
 from utils import generate_random_password, save_to_txt, update_account_status
-from email_service import create_temp_email, wait_for_verification_email
+from email_service import (
+    create_temp_email,
+    create_mailbox_marker,
+    wait_for_verification_email_with_marker
+)
 from browser import (
     create_driver,
     fill_signup_form,
@@ -57,7 +61,7 @@ def register_one_account(monitor_callback=None):
     try:
         # 1. 创建临时邮箱
         print("📧 正在创建临时邮箱...")
-        email, jwt_token = create_temp_email()
+        email, email_context_token = create_temp_email()
         if not email:
             print("❌ 创建邮箱失败，终止注册")
             return None, None, False
@@ -77,6 +81,7 @@ def register_one_account(monitor_callback=None):
         _report("open_page")
         
         # 5. 填写注册表单（邮箱和密码）
+        verification_email_marker = create_mailbox_marker()
         if not fill_signup_form(driver, email, password):
             print("❌ 填写注册表单失败")
             return email, password, False
@@ -84,7 +89,10 @@ def register_one_account(monitor_callback=None):
         
         # 6. 等待验证邮件
         time.sleep(5)
-        verification_code = wait_for_verification_email(jwt_token)
+        verification_code = wait_for_verification_email_with_marker(
+            email_context_token,
+            since_marker=verification_email_marker
+        )
         
         # 如果没有自动获取到验证码，提示手动输入
         if not verification_code:

@@ -6,7 +6,7 @@ import builtins
 import os
 import random
 from datetime import datetime
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
 
 # 导入业务逻辑
 import main
@@ -36,7 +36,8 @@ class AppState:
         self.lock = threading.Lock()
         
         # MJPEG 流缓冲区
-        self.last_frame = None 
+        self.last_frame = None
+        self.frame_version = 0
         self.frame_lock = threading.Lock()
 
     def add_log(self, message):
@@ -53,10 +54,20 @@ class AppState:
     def update_frame(self, frame_bytes):
         with self.frame_lock:
             self.last_frame = frame_bytes
+            self.frame_version += 1
+
+    def clear_frame(self):
+        with self.frame_lock:
+            self.last_frame = None
+            self.frame_version = 0
             
     def get_frame(self):
         with self.frame_lock:
             return self.last_frame
+
+    def get_frame_version(self):
+        with self.frame_lock:
+            return self.frame_version
 
 state = AppState()
 
@@ -84,7 +95,7 @@ def worker_thread(count):
     state.current_action = f"🚀 任务启动，目标: {count}"
     
     # 清空上一轮的画面，避免显示残留
-    state.update_frame(None)
+    state.clear_frame()
     
     main.print(f"🚀 开始批量任务，计划注册: {count} 个")
     
@@ -158,8 +169,16 @@ def gen_frames():
 
 @app.route('/video_feed')
 def video_feed():
-    return Flask.response_class(gen_frames(),
-                               mimetype='multipart/x-mixed-replace; boundary=frame')
+    return app.response_class(gen_frames(),
+                              mimetype='multipart/x-mixed-replace; boundary=frame')
+
+
+@app.route('/api/frame')
+def latest_frame():
+    frame = state.get_frame()
+    if not frame:
+        return Response(status=204)
+    return Response(frame, mimetype='image/png')
 
 # ==========================================
 # 🌐 API 接口
@@ -186,6 +205,8 @@ def get_status():
         "success": state.success_count,
         "fail": state.fail_count,
         "total_inventory": total_inventory,
+        "has_frame": state.get_frame() is not None,
+        "frame_version": state.get_frame_version(),
         "logs": state.get_logs(int(request.args.get('log_index', 0)))
     })
 

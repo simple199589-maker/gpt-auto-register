@@ -1,6 +1,8 @@
 let isRunning = false;
 let logIndex = 0;
 let pollInterval = null;
+let lastFrameVersion = -1;
+let isStreamingMonitor = false;
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
@@ -59,12 +61,12 @@ function updateUI(data) {
     if (isRunning) {
         btnStart.classList.add('hidden');
         btnStop.classList.remove('hidden');
-        statusDot.classList.add('running');
+        statusDot.classList.add('active');
         statusText.textContent = "运行中";
     } else {
         btnStart.classList.remove('hidden');
         btnStop.classList.add('hidden');
-        statusDot.classList.remove('running');
+        statusDot.classList.remove('active');
         statusText.textContent = "系统空闲";
     }
 
@@ -72,25 +74,47 @@ function updateUI(data) {
     const monitorImg = document.getElementById('liveMonitor');
     const noSignal = document.getElementById('noSignal');
     const monitorStatus = document.getElementById('monitorStatus');
+    const hasFrame = Boolean(data.has_frame);
+    const frameVersion = Number.isInteger(data.frame_version) ? data.frame_version : -1;
 
-    if (isRunning) {
+    if (isRunning || hasFrame) {
         monitorImg.classList.remove('hidden');
-        noSignal.classList.add('hidden');
+        if (isRunning) {
+            if (!isStreamingMonitor || !monitorImg.src || monitorImg.src.indexOf('/video_feed') === -1) {
+                monitorImg.src = `/video_feed?ts=${Date.now()}`;
+                isStreamingMonitor = true;
+            }
 
-        // 只有当 src 为空或不仅仅是 feed 时才赋值，避免重复刷新流导致闪烁
-        if (!monitorImg.src || monitorImg.src.indexOf('/video_feed') === -1) {
-            monitorImg.src = "/video_feed";
+            if (hasFrame) {
+                noSignal.classList.add('hidden');
+            } else {
+                noSignal.classList.remove('hidden');
+                noSignal.textContent = "等待首帧画面...";
+            }
+        } else {
+            isStreamingMonitor = false;
+            if (hasFrame) {
+                noSignal.classList.add('hidden');
+                if (frameVersion !== lastFrameVersion || monitorImg.src.indexOf('/api/frame') === -1) {
+                    monitorImg.src = `/api/frame?v=${frameVersion}`;
+                    lastFrameVersion = frameVersion;
+                }
+            } else {
+                noSignal.classList.remove('hidden');
+                noSignal.textContent = "等待信号...";
+            }
         }
-
-        monitorStatus.textContent = "LIVE";
+        monitorStatus.textContent = isRunning ? "LIVE" : "IDLE";
         monitorStatus.classList.remove('neutral');
         monitorStatus.classList.add('success');
     } else {
+        isStreamingMonitor = false;
+        monitorImg.classList.add('hidden');
+        noSignal.classList.remove('hidden');
+        noSignal.textContent = "等待信号...";
         monitorStatus.textContent = "OFFLINE";
         monitorStatus.classList.remove('success');
         monitorStatus.classList.add('neutral');
-        // 任务结束，但不一定要断开流，因为可能还有最后一帧画面
-        // 如果想断开：monitorImg.src = "";
     }
 
     // 5. 追加日志
