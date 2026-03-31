@@ -36,6 +36,7 @@ venv.bak/
 config.yaml
 config.local.yaml
 registered_accounts.txt
+output_tokens/
 *.log
 monitor.jpg
 debug_*.png

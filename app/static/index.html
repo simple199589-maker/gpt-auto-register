@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoGPT Console</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/ant-design-vue@4/dist/reset.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div id="app"></div>
+
+    <script type="text/x-template" id="app-template">
+        <div class="console-shell">
+            <aside class="sidebar">
+                <div class="brand-card">
+                    <div class="brand-mark" aria-hidden="true">
+                        <svg viewBox="0 0 48 48" fill="none">
+                            <defs>
+                                <linearGradient id="brandGradient" x1="8" y1="6" x2="40" y2="42" gradientUnits="userSpaceOnUse">
+                                    <stop stop-color="#6D5EF7"></stop>
+                                    <stop offset="1" stop-color="#2D8CFF"></stop>
+                                </linearGradient>
+                            </defs>
+                            <rect x="4" y="4" width="40" height="40" rx="14" fill="url(#brandGradient)"></rect>
+                            <path d="M24.8 10.5L15.7 26.2H22.4L20.5 37.5L32.3 21.8H25.8L24.8 10.5Z" fill="white"></path>
+                        </svg>
+                    </div>
+                    <div>
+                        <div class="brand-title">AutoGPT</div>
+                        <div class="brand-subtitle">Vue Console</div>
+                    </div>
+                </div>
+
+                <a-menu
+                    mode="inline"
+                    class="nav-menu"
+                    :selected-keys="[currentTab]"
+                    @click="handleMenuClick"
+                >
+                    <a-menu-item key="dashboard">
+                        <appstore-outlined></appstore-outlined>
+                        <span>仪表盘</span>
+                    </a-menu-item>
+                    <a-menu-item key="accounts">
+                        <team-outlined></team-outlined>
+                        <span>账号管理</span>
+                    </a-menu-item>
+                </a-menu>
+
+                <a-card class="sidebar-card" :bordered="false">
+                    <template #title>
+                        <div class="card-title-inline">
+                            <play-circle-outlined></play-circle-outlined>
+                            <span>任务控制</span>
+                        </div>
+                    </template>
+
+                    <div class="control-stack">
+                        <div class="field-label">注册数量</div>
+                        <a-input-number
+                            v-model:value="targetCount"
+                            :min="1"
+                            :max="50"
+                            :controls="false"
+                            class="full-width"
+                        ></a-input-number>
+
+                        <a-button
+                            v-if="!isRunning"
+                            type="primary"
+                            block
+                            class="primary-action"
+                            @click="startTask"
+                        >
+                            <template #icon>
+                                <play-circle-outlined></play-circle-outlined>
+                            </template>
+                            启动任务
+                        </a-button>
+
+                        <a-button
+                            v-else
+                            danger
+                            block
+                            class="secondary-action"
+                            @click="stopTask"
+                        >
+                            <template #icon>
+                                <pause-circle-outlined></pause-circle-outlined>
+                            </template>
+                            停止运行
+                        </a-button>
+                    </div>
+                </a-card>
+
+                <a-card class="sidebar-card settings-card" :bordered="false">
+                    <template #title>
+                        <div class="card-title-inline">
+                            <setting-outlined></setting-outlined>
+                            <span>自动流程</span>
+                        </div>
+                    </template>
+
+                    <div class="setting-block">
+                        <div class="setting-copy">
+                            <div class="setting-title">Plus 激活</div>
+                            <div class="setting-desc">关闭后注册成功将直接进入 Sub2Api 步骤</div>
+                        </div>
+                        <a-switch
+                            v-model:checked="settings.plus_auto_activate_enabled"
+                            :disabled="isRunning || settingsSaving"
+                            :loading="settingsSaving"
+                            @change="saveAutomationSettings"
+                        ></a-switch>
+                    </div>
+
+                    <div class="setting-block">
+                        <div class="setting-copy">
+                            <div class="setting-title">Sub2Api 自动上传</div>
+                            <div class="setting-desc">开启后会自动提交到 Sub2Api</div>
+                        </div>
+                        <a-switch
+                            v-model:checked="settings.sub2api_auto_upload_enabled"
+                            :disabled="isRunning || settingsSaving"
+                            :loading="settingsSaving"
+                            @change="saveAutomationSettings"
+                        ></a-switch>
+                    </div>
+
+                    <div class="setting-field">
+                        <div class="setting-copy">
+                            <div class="setting-title">Sub2Api 分组</div>
+                            <div class="setting-desc">支持多个分组 ID，使用逗号分隔，例如 `5,8`</div>
+                        </div>
+                        <a-input
+                            v-model:value="settings.sub2api_group_ids_text"
+                            :disabled="isRunning || settingsSaving"
+                            class="settings-input"
+                            placeholder="例如 5"
+                            @focus="groupIdsInputFocused = true"
+                            @blur="handleGroupIdsBlur"
+                            @pressEnter="saveAutomationSettings"
+                        ></a-input>
+                    </div>
+
+                    <div class="setting-footnote">
+                        {{ isRunning ? '任务运行中，暂时不能修改设置' : (settingsSaving ? '设置保存中...' : '空闲时可切换设置') }}
+                    </div>
+                </a-card>
+            </aside>
+
+            <main class="main-panel">
+                <header class="topbar">
+                    <div>
+                        <div class="page-eyebrow">{{ currentTab === 'dashboard' ? 'System Overview' : 'Account Operations' }}</div>
+                        <h1 class="page-title">{{ currentTab === 'dashboard' ? '系统概览' : '账号管理' }}</h1>
+                    </div>
+
+                    <div class="topbar-right">
+                        <div class="topbar-meta">
+                            <div class="meta-chip">
+                                <span class="dot" :class="{ active: isRunning }"></span>
+                                <span>{{ isRunning ? '系统运行中' : '系统空闲' }}</span>
+                            </div>
+                            <div class="meta-chip">
+                                <clock-circle-outlined></clock-circle-outlined>
+                                <span>更新时间 {{ lastUpdate }}</span>
+                            </div>
+                        </div>
+
+                        <div v-if="currentTab === 'accounts'" class="topbar-tags">
+                            <a-tag color="blue">账号数 {{ accountPagination.total }}</a-tag>
+                            <a-tag :color="settings.plus_auto_activate_enabled ? 'green' : 'default'">
+                                Plus {{ settings.plus_auto_activate_enabled ? 'ON' : 'OFF' }}
+                            </a-tag>
+                            <a-tag :color="settings.sub2api_auto_upload_enabled ? 'cyan' : 'default'">
+                                Sub2Api {{ settings.sub2api_auto_upload_enabled ? 'ON' : 'OFF' }}
+                            </a-tag>
+                        </div>
+                    </div>
+                </header>
+
+                <section v-if="currentTab === 'dashboard'" class="dashboard-page">
+                    <div class="stats-grid">
+                        <a-card class="stat-card" :bordered="false">
+                            <div class="stat-label">当前步骤</div>
+                            <div class="stat-primary">{{ currentAction || '等待启动' }}</div>
+                        </a-card>
+                        <a-card class="stat-card" :bordered="false">
+                            <div class="stat-label">本次成功</div>
+                            <div class="stat-number success">{{ successCount }}</div>
+                        </a-card>
+                        <a-card class="stat-card" :bordered="false">
+                            <div class="stat-label">本次失败</div>
+                            <div class="stat-number danger">{{ failCount }}</div>
+                        </a-card>
+                        <a-card class="stat-card" :bordered="false">
+                            <div class="stat-label">库存总数</div>
+                            <div class="stat-number accent">{{ totalInventory }}</div>
+                        </a-card>
+                    </div>
+
+                    <div class="dashboard-grid">
+                        <a-card class="panel-card" :bordered="false">
+                            <template #title>
+                                <div class="card-title-inline">
+                                    <video-camera-outlined></video-camera-outlined>
+                                    <span>实时画面</span>
+                                </div>
+                            </template>
+                            <template #extra>
+                                <a-tag :color="monitorStatusColor">{{ monitorStatusText }}</a-tag>
+                            </template>
+
+                            <div class="monitor-stage" :class="{ ready: !!monitorUrl }">
+                                <img v-if="monitorUrl" :src="monitorUrl" alt="实时画面" class="monitor-frame">
+                                <div v-else class="monitor-placeholder">
+                                    <monitor-outlined></monitor-outlined>
+                                    <span>{{ isRunning ? '等待首帧画面...' : '等待任务启动...' }}</span>
+                                </div>
+                            </div>
+                        </a-card>
+
+                        <a-card class="panel-card" :bordered="false">
+                            <template #title>
+                                <div class="card-title-inline">
+                                    <code-outlined></code-outlined>
+                                    <span>终端日志</span>
+                                </div>
+                            </template>
+                            <template #extra>
+                                <a-button type="text" @click="clearLogs">清空</a-button>
+                            </template>
+
+                            <div class="log-console" ref="logContainerRef">
+                                <template v-if="logs.length">
+                                    <div v-for="(log, index) in logs" :key="`${index}-${log}`" class="log-entry">
+                                        {{ log }}
+                                    </div>
+                                </template>
+                                <a-empty v-else :image="false" description="等待任务启动..."></a-empty>
+                            </div>
+                        </a-card>
+                    </div>
+                </section>
+
+                <section v-else class="accounts-page">
+                    <a-card class="panel-card accounts-card" :bordered="false">
+                        <div class="accounts-toolbar">
+                            <div class="accounts-toolbar-main">
+                                <a-input
+                            v-model:value="accountFilters.keyword"
+                            allow-clear
+                            placeholder="搜索邮箱 / 状态 / Plus / Sub2Api"
+                            @change="resetAccountPagination"
+                        >
+                                    <template #prefix>
+                                        <search-outlined></search-outlined>
+                                    </template>
+                                </a-input>
+
+                                <a-select
+                                    v-model:value="accountFilters.registration"
+                                    class="toolbar-select"
+                                    @change="resetAccountPagination"
+                                >
+                                    <a-select-option value="all">注册：全部</a-select-option>
+                                    <a-select-option value="pending">注册：进行中</a-select-option>
+                                    <a-select-option value="success">注册：成功</a-select-option>
+                                    <a-select-option value="failed">注册：失败</a-select-option>
+                                </a-select>
+
+                                <a-select
+                                    v-model:value="accountFilters.overall"
+                                    class="toolbar-select"
+                                    @change="resetAccountPagination"
+                                >
+                                    <a-select-option value="all">总状态：全部</a-select-option>
+                                    <a-select-option value="pending">总状态：处理中</a-select-option>
+                                    <a-select-option value="success">总状态：成功/完成</a-select-option>
+                                    <a-select-option value="failed">总状态：失败/异常</a-select-option>
+                                </a-select>
+
+                                <a-select
+                                    v-model:value="accountFilters.plus"
+                                    class="toolbar-select"
+                                    @change="resetAccountPagination"
+                                >
+                                    <a-select-option value="all">Plus：全部</a-select-option>
+                                    <a-select-option value="success">Plus：已激活</a-select-option>
+                                    <a-select-option value="idle">Plus：未调用</a-select-option>
+                                    <a-select-option value="failed">Plus：失败</a-select-option>
+                                    <a-select-option value="disabled">Plus：已关闭</a-select-option>
+                                </a-select>
+
+                                <a-select
+                                    v-model:value="accountFilters.sub2api"
+                                    class="toolbar-select"
+                                    @change="resetAccountPagination"
+                                >
+                                    <a-select-option value="all">Sub2Api：全部</a-select-option>
+                                    <a-select-option value="success">Sub2Api：已上传</a-select-option>
+                                    <a-select-option value="pending">Sub2Api：待上传</a-select-option>
+                                    <a-select-option value="failed">Sub2Api：失败</a-select-option>
+                                    <a-select-option value="disabled">Sub2Api：未启用</a-select-option>
+                                </a-select>
+                            </div>
+
+                            <div class="accounts-toolbar-side">
+                                <a-button :loading="accountsLoading" @click="loadAccounts">
+                                    <template #icon>
+                                        <reload-outlined></reload-outlined>
+                                    </template>
+                                    刷新列表
+                                </a-button>
+                            </div>
+                        </div>
+
+                        <a-table
+                            :columns="accountColumns"
+                            :data-source="pagedAccounts"
+                            :pagination="false"
+                            :loading="accountsLoading"
+                            :row-key="getAccountRowKey"
+                            class="accounts-table"
+                            size="middle"
+                            :scroll="{ x: 1020 }"
+                        >
+                            <template #emptyText>
+                                <a-empty :image="false" description="暂无匹配账号"></a-empty>
+                            </template>
+
+                            <template #bodyCell="{ column, record }">
+                                <template v-if="column.key === 'email'">
+                                    <a-tooltip placement="topLeft" overlayClassName="status-tooltip status-tooltip-info">
+                                        <template #title>
+                                            <div class="status-tooltip-content">{{ record.email }}</div>
+                                        </template>
+                                        <div class="copy-cell-wrap">
+                                            <span class="cell-main email-cell copy-cell-label">{{ formatEmailCompact(record.email) }}</span>
+                                            <button
+                                                type="button"
+                                                class="copy-cell-button"
+                                                title="复制账号"
+                                                @click.stop="copyText(record.email, '账号')"
+                                            >
+                                                <span class="copy-cell-icon" aria-hidden="true">
+                                                    <svg viewBox="0 0 24 24" fill="none">
+                                                        <rect x="9" y="9" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.6"></rect>
+                                                        <path d="M7 15H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+                                                    </svg>
+                                                </span>
+                                            </button>
+                                        </div>
+                                    </a-tooltip>
+                                </template>
+
+                                <template v-else-if="column.key === 'password'">
+                                    <a-tooltip placement="top" overlayClassName="status-tooltip status-tooltip-info">
+                                        <template #title>
+                                            <div class="status-tooltip-content">{{ record.password }}</div>
+                                        </template>
+                                        <div class="copy-cell-wrap">
+                                            <span class="mono-text password-cell copy-cell-label">{{ formatPasswordCompact(record.password) }}</span>
+                                            <button
+                                                type="button"
+                                                class="copy-cell-button"
+                                                title="复制密码"
+                                                @click.stop="copyText(record.password, '密码')"
+                                            >
+                                                <span class="copy-cell-icon" aria-hidden="true">
+                                                    <svg viewBox="0 0 24 24" fill="none">
+                                                        <rect x="9" y="9" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.6"></rect>
+                                                        <path d="M7 15H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+                                                    </svg>
+                                                </span>
+                                            </button>
+                                        </div>
+                                    </a-tooltip>
+                                </template>
+
+                                <template v-else-if="column.key === 'status'">
+                                    <a-tooltip
+                                        v-if="getPrimaryStatusReason(record)"
+                                        placement="topLeft"
+                                        :overlayClassName="getStatusTooltipClass(getPrimaryStatusTone(record))"
+                                    >
+                                        <template #title>
+                                            <div class="status-tooltip-content">{{ getPrimaryStatusReason(record) }}</div>
+                                        </template>
+                                        <div class="status-cell has-reason" :class="`tone-${getPrimaryStatusTone(record)}`">
+                                            <a-tag class="status-tag-pill" :color="getPrimaryTagColor(record)">
+                                                {{ getPrimaryStatusLabel(record) }}
+                                            </a-tag>
+                                            <info-circle-outlined class="status-hint-icon"></info-circle-outlined>
+                                        </div>
+                                    </a-tooltip>
+                                    <div v-else class="status-cell">
+                                        <a-tag class="status-tag-pill" :color="getPrimaryTagColor(record)">
+                                            {{ getPrimaryStatusLabel(record) }}
+                                        </a-tag>
+                                    </div>
+                                </template>
+
+                                <template v-else-if="column.key === 'sub2api'">
+                                    <a-tooltip
+                                        v-if="getSub2ApiReason(record)"
+                                        placement="topLeft"
+                                        :overlayClassName="getStatusTooltipClass(getSub2ApiStatusTone(record))"
+                                    >
+                                        <template #title>
+                                            <div class="status-tooltip-content">{{ getSub2ApiReason(record) }}</div>
+                                        </template>
+                                        <div class="status-cell has-reason" :class="`tone-${getSub2ApiStatusTone(record)}`">
+                                            <a-tag class="status-tag-pill" :color="getSub2ApiTagColor(record)">
+                                                {{ record.sub2apiStatus || '未上传' }}
+                                            </a-tag>
+                                            <info-circle-outlined class="status-hint-icon"></info-circle-outlined>
+                                        </div>
+                                    </a-tooltip>
+                                    <div v-else class="status-cell">
+                                        <a-tag class="status-tag-pill" :color="getSub2ApiTagColor(record)">
+                                            {{ record.sub2apiStatus || '未上传' }}
+                                        </a-tag>
+                                    </div>
+                                </template>
+
+                                <template v-else-if="column.key === 'time'">
+                                    <a-tooltip placement="top" overlayClassName="status-tooltip status-tooltip-info">
+                                        <template #title>
+                                            <div class="status-tooltip-content">{{ record.time || '--' }}</div>
+                                        </template>
+                                        <div class="mono-text time-inline">
+                                            <span class="time-icon" aria-hidden="true">
+                                                <svg viewBox="0 0 24 24" fill="none">
+                                                    <circle cx="12" cy="12" r="8.25" stroke="currentColor" stroke-width="1.6"></circle>
+                                                    <path d="M12 7.8V12.2L15 13.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path>
+                                                </svg>
+                                            </span>
+                                            <span class="time-cell">{{ formatTimeCompact(record.time) }}</span>
+                                        </div>
+                                    </a-tooltip>
+                                </template>
+
+                                <template v-else-if="column.key === 'actions'">
+                                    <a-button
+                                        v-if="shouldShowCancelActivation(record)"
+                                        size="small"
+                                        class="table-action-trigger table-action-trigger-danger"
+                                        :loading="isAccountActionRunning('/api/accounts/cancel-activation', record.email)"
+                                        :title="'取消激活'"
+                                        @click="handleCancelActivation(record)"
+                                    >
+                                        <span class="table-action-glyph" aria-hidden="true">
+                                            <svg viewBox="0 0 24 24" fill="none">
+                                                <circle cx="12" cy="12" r="8.25" stroke="currentColor" stroke-width="1.6"></circle>
+                                                <path d="M9 9h6v6H9z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"></path>
+                                            </svg>
+                                        </span>
+                                    </a-button>
+                                    <a-popover
+                                        v-else-if="hasAccountActions(record)"
+                                        trigger="click"
+                                        placement="leftTop"
+                                        overlayClassName="table-action-popover"
+                                        :open="isActionPopoverOpen(record)"
+                                        @update:open="(open) => setActionPopoverOpen(record, open)"
+                                    >
+                                        <template #content>
+                                            <div class="table-action-menu">
+                                                <button
+                                                    class="table-action-item"
+                                                    :disabled="!record.canEditStatus"
+                                                    @click="handleAccountActionMenu('editStatus', record)"
+                                                >
+                                                    修改状态
+                                                </button>
+                                                <button
+                                                    class="table-action-item"
+                                                    :disabled="!record.canRetryRegistration"
+                                                    @click="handleAccountActionMenu('retryRegistration', record)"
+                                                >
+                                                    继续注册
+                                                </button>
+                                                <button
+                                                    class="table-action-item"
+                                                    :disabled="!record.canRetryPlus"
+                                                    @click="handleAccountActionMenu('retryPlus', record)"
+                                                >
+                                                    重试 Plus
+                                                </button>
+                                                <button
+                                                    class="table-action-item"
+                                                    :disabled="!record.canRetryTeam"
+                                                    @click="handleAccountActionMenu('retryTeam', record)"
+                                                >
+                                                    激活 Team
+                                                </button>
+                                                <button
+                                                    class="table-action-item"
+                                                    :disabled="!record.canUploadSub2api"
+                                                    @click="handleAccountActionMenu('uploadSub2Api', record)"
+                                                >
+                                                    {{ record.sub2apiUploaded ? '重新上传 Sub2Api' : '上传 Sub2Api' }}
+                                                </button>
+                                                <button
+                                                    class="table-action-item table-action-item-danger"
+                                                    :disabled="!record.canDeleteAccount"
+                                                    @click="handleAccountActionMenu('deleteAccount', record)"
+                                                >
+                                                    删除账号
+                                                </button>
+                                            </div>
+                                        </template>
+
+                                        <a-button
+                                            size="small"
+                                            class="table-action-trigger"
+                                            :loading="isAnyAccountActionRunning(record)"
+                                            :title="'操作'"
+                                        >
+                                            <span class="table-action-glyph" aria-hidden="true">
+                                                <svg viewBox="0 0 24 24" fill="none">
+                                                    <path
+                                                        d="M10.2 2.6h3.6l.5 2.3c.5.2 1 .4 1.4.8l2.2-.8 1.8 3.1-1.8 1.5c.1.3.1.7.1 1.1s0 .7-.1 1.1l1.8 1.5-1.8 3.1-2.2-.8c-.4.3-.9.6-1.4.8l-.5 2.3h-3.6l-.5-2.3c-.5-.2-1-.4-1.4-.8l-2.2.8-1.8-3.1 1.8-1.5a5 5 0 010-2.2L4.6 8l1.8-3.1 2.2.8c.4-.3.9-.6 1.4-.8l.5-2.3Z"
+                                                        stroke="currentColor"
+                                                        stroke-width="1.7"
+                                                        stroke-linejoin="round"
+                                                    />
+                                                    <circle cx="12" cy="12" r="2.8" stroke="currentColor" stroke-width="1.7" />
+                                                </svg>
+                                            </span>
+                                        </a-button>
+                                    </a-popover>
+                                    <span v-else class="action-empty">--</span>
+                                </template>
+                            </template>
+                        </a-table>
+
+                        <div class="accounts-footer">
+                            <div class="accounts-summary">
+                                共 {{ accountPagination.total }} 条，当前第 {{ accountPagination.current }} / {{ totalAccountPages }} 页
+                            </div>
+
+                            <a-pagination
+                                v-model:current="accountPagination.current"
+                                v-model:page-size="accountPagination.pageSize"
+                                :total="accountPagination.total"
+                                :show-size-changer="true"
+                                :page-size-options="pageSizeOptions"
+                                :show-total="paginationTotalText"
+                            ></a-pagination>
+                        </div>
+                    </a-card>
+                </section>
+            </main>
+        </div>
+    </script>
+
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://unpkg.com/dayjs@1/dayjs.min.js"></script>
+    <script src="https://unpkg.com/dayjs@1/plugin/advancedFormat.js"></script>
+    <script src="https://unpkg.com/dayjs@1/plugin/customParseFormat.js"></script>
+    <script src="https://unpkg.com/dayjs@1/plugin/localeData.js"></script>
+    <script src="https://unpkg.com/dayjs@1/plugin/quarterOfYear.js"></script>
+    <script src="https://unpkg.com/dayjs@1/plugin/weekOfYear.js"></script>
+    <script src="https://unpkg.com/dayjs@1/plugin/weekYear.js"></script>
+    <script src="https://unpkg.com/dayjs@1/plugin/weekday.js"></script>
+    <script src="https://unpkg.com/ant-design-vue@4/dist/antd.min.js"></script>
+    <script src="https://unpkg.com/@ant-design/icons-vue@7/dist/index.umd.min.js"></script>
+    <script src="script.js"></script>
+</body>
+
+</html>

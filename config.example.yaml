@@ -35,6 +35,8 @@ browser:
   max_wait_time: 600    # 全局最大等待时间
   short_wait_time: 120  # 短任务等待时间
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  show_browser_window: true   # 是否显示浏览器窗口；稳定预览建议开启
+  keep_browser_open_after_registration: true   # 仅当前轮注册成功后暂时保留；若还有下一轮，会在等待下一轮前先关闭
 
 # 账号密码规则
 password:
@@ -48,13 +50,14 @@ retry:
   http_timeout: 30          # HTTP 请求超时时间
   error_page_max_retries: 5 # 遇到错误页面的最大刷新重试次数
   button_click_max_retries: 3 # 按钮点击最大重试次数
+  manual_activation_attempts: 3 # 点击“重试 Plus / 激活 Team”时的最大重试轮数
 
 # 批量注册间隔
 batch:
   interval_min: 5  # 最小间隔(秒)
   interval_max: 15 # 最大间隔(秒)
 
-# 支付信息 (用于自动绑定 Plus 试用)
+# 支付信息（历史遗留配置，当前默认流程不再使用）
 # 警告: 请勿在此文件中填入真实的信用卡信息，除非此文件不被公开
 payment:
   credit_card:
@@ -67,12 +70,35 @@ payment:
 # 文件路径配置
 files:
   accounts_file: "registered_accounts.txt"  # 注册成功账号的保存路径
+  accounts_db_file: "data/accounts.db"      # 本地账号数据库路径
+
+# ------------------------------------------------------------
+# Plus 绑定模式
+# 可选:
+#   - activation_api: 提取 accessToken 后调用激活接口
+#   - legacy_browser: 使用旧版浏览器自动化绑定 Plus
+# ------------------------------------------------------------
+plus:
+  mode: "activation_api"
+  auto_activate: true
+
+# ------------------------------------------------------------
+# Plus 激活接口配置
+# ------------------------------------------------------------
+activation_api:
+  base_url: "https://bot.joini.cloud"
+  api_key: "your_activation_api_key"
+  bearer: ""
+  poll_interval: 3
+  poll_timeout: 300
 
 # ------------------------------------------------------------
 # Sub2Api 配置
 # ------------------------------------------------------------
 sub2api:
-  base_url: "http://localhost:8000"
-  api_key: "sub2 里面的管理员api-key"
+  base_url: "https://your-sub2api-domain"
+  bearer: ""
+  email: "admin@sub2api.local"
+  password: "your-sub2api-admin-password"
   auto_upload_sub2api: true
   group_ids: [2]
