@@ -678,7 +678,13 @@ def run_delivery_for_account(
             delivery_email=normalized_delivery_email,
         )
 
-    temp_access_result = create_temp_access_url(normalized_delivery_email)
+    temp_access_result = create_temp_access_url(
+        normalized_delivery_email,
+        extra_query_params={
+            "address": normalized_delivery_email,
+            "email": normalized_delivery_email,
+        },
+    )
     temp_access_url = str(temp_access_result.get("url") or "").strip()
     temp_access_ready = bool(temp_access_result.get("success")) and bool(temp_access_url)
     if temp_access_ready:

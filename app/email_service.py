@@ -10,6 +10,7 @@ import random
 from datetime import datetime, timezone
 from email import policy
 from typing import Any, Dict, Optional
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app.config import (
     EMAIL_WORKER_URL,
@@ -106,6 +107,43 @@ def _absolute_email_service_url(url: str) -> str:
     return f"{EMAIL_WORKER_URL.rstrip('/')}/{normalized_url.lstrip('/')}"
 
 
+def _append_query_params(url: str, params: Optional[Dict[str, Any]] = None) -> str:
+    """
+    为链接追加查询参数，保留已有参数并忽略空值。
+
+    参数:
+        url: 原始链接
+        params: 需要追加的查询参数
+    返回:
+        str: 追加参数后的链接
+        AI by zb
+    """
+    normalized_url = str(url or "").strip()
+    if not normalized_url or not params:
+        return normalized_url
+
+    normalized_params = {
+        str(key): str(value).strip()
+        for key, value in dict(params or {}).items()
+        if str(key or "").strip() and str(value or "").strip()
+    }
+    if not normalized_params:
+        return normalized_url
+
+    url_parts = urlsplit(normalized_url)
+    query_pairs = dict(parse_qsl(url_parts.query, keep_blank_values=True))
+    query_pairs.update(normalized_params)
+    return urlunsplit(
+        (
+            url_parts.scheme,
+            url_parts.netloc,
+            url_parts.path,
+            urlencode(query_pairs),
+            url_parts.fragment,
+        )
+    )
+
+
 def send_single_email(
     to_email: str,
     subject: str,
@@ -181,12 +219,13 @@ def send_single_email(
     }
 
 
-def create_temp_access_url(address: str) -> Dict[str, Any]:
+def create_temp_access_url(address: str, extra_query_params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     为指定邮箱生成临时访问链接。
 
     参数:
         address: 邮箱地址
+        extra_query_params: 需要附加到返回链接中的查询参数
     返回:
         Dict[str, Any]: 临时访问结果
         AI by zb
@@ -230,7 +269,10 @@ def create_temp_access_url(address: str) -> Dict[str, Any]:
             "code": "",
         }
 
-    url = _absolute_email_service_url(str(result.get("url") or "").strip())
+    url = _append_query_params(
+        _absolute_email_service_url(str(result.get("url") or "").strip()),
+        extra_query_params,
+    )
     succeeded = bool(result.get("success")) and bool(url)
     return {
         "success": succeeded,
