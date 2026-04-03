@@ -10,7 +10,7 @@ import hashlib
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -40,12 +40,39 @@ class PlusActivationResult:
 
     success: bool
     stage: str
+    accepted: bool = False
     access_token: str = ""
     request_id: str = ""
     status: str = ""
     message: str = ""
     response_data: Dict[str, Any] = field(default_factory=dict)
     session_info: Dict[str, Any] = field(default_factory=dict)
+
+
+class ManualActivationCancelledError(RuntimeError):
+    """
+    手动激活流程已收到取消请求。
+
+    AI by zb
+    """
+
+
+def _ensure_activation_not_cancelled(
+    should_cancel: Optional[Callable[[], bool]],
+    action_label: str,
+) -> None:
+    """
+    检查当前激活流程是否已收到取消请求。
+
+    参数:
+        should_cancel: 取消检查函数
+        action_label: 激活类型显示名称
+    返回:
+        None
+        AI by zb
+    """
+    if should_cancel and should_cancel():
+        raise ManualActivationCancelledError(f"{action_label}已取消")
 
 
 def _cache_key_for_access_token(access_token: str, cache_scope: str = "plus") -> str:
@@ -77,6 +104,7 @@ def _clone_plus_result(result: PlusActivationResult) -> PlusActivationResult:
     return PlusActivationResult(
         success=result.success,
         stage=result.stage,
+        accepted=result.accepted,
         access_token=result.access_token,
         request_id=result.request_id,
         status=result.status,
@@ -136,6 +164,410 @@ def _set_cached_plus_result(access_token: str, result: PlusActivationResult, cac
             "created_at": time.time(),
             "result": _clone_plus_result(result),
         }
+
+
+def _coerce_activation_success_flag(value: Any) -> Optional[bool]:
+    """
+    将接口返回的 success 字段解析为布尔值。
+
+    参数:
+        value: success 原始值
+    返回:
+        Optional[bool]: 解析结果；无法判断时返回 None
+        AI by zb
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if value is None:
+        return None
+
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return None
+    if normalized in {"1", "true", "yes", "ok", "success", "succeeded", "completed", "done"}:
+        return True
+    if normalized in {"0", "false", "no", "fail", "failed", "error", "cancelled", "canceled"}:
+        return False
+    return None
+
+
+def _infer_activation_success(final_data: Dict[str, Any]) -> bool:
+    """
+    按任务查询接口标准字段判断当前激活是否最终成功。
+
+    参数:
+        final_data: 激活接口返回数据
+    返回:
+        bool: 是否成功
+        AI by zb
+    """
+    explicit_success = _coerce_activation_success_flag((final_data or {}).get("success"))
+    state = str((final_data or {}).get("state") or "").strip().lower()
+    status = str((final_data or {}).get("status") or "").strip().lower()
+    return state == "completed" and explicit_success is True and status == "success"
+
+
+def _is_cancelled_activation_result(final_data: Optional[Dict[str, Any]]) -> bool:
+    """
+    判断任务快照是否属于已取消终态。
+
+    参数:
+        final_data: 激活接口返回数据
+    返回:
+        bool: 是否已取消
+        AI by zb
+    """
+    if not isinstance(final_data, dict):
+        return False
+    state = str(final_data.get("state") or "").strip().lower()
+    status = str(final_data.get("status") or "").strip().lower()
+    return state in {"cancelled", "canceled"} or status in {"cancelled", "canceled"}
+
+
+def _extract_request_id(data: Optional[Dict[str, Any]]) -> str:
+    """
+    从接口返回中提取 requestId。
+
+    参数:
+        data: 接口返回数据
+    返回:
+        str: requestId
+        AI by zb
+    """
+    if not isinstance(data, dict):
+        return ""
+
+    direct_request_id = str(data.get("requestId") or data.get("request_id") or "").strip()
+    if direct_request_id:
+        return direct_request_id
+
+    nested_data = data.get("data")
+    if isinstance(nested_data, dict):
+        return str(nested_data.get("requestId") or nested_data.get("request_id") or "").strip()
+    return ""
+
+
+def _normalize_activation_state(data: Optional[Dict[str, Any]]) -> str:
+    """
+    规范化激活任务状态字段。
+
+    参数:
+        data: 接口返回数据
+    返回:
+        str: 标准化后的状态
+        AI by zb
+    """
+    if not isinstance(data, dict):
+        return ""
+    return str(data.get("state") or data.get("status") or "").strip().lower()
+
+
+def _collect_activation_response_text(data: Optional[Dict[str, Any]]) -> str:
+    """
+    汇总激活接口返回中的状态文案，便于统一识别中间态关键词。
+
+    参数:
+        data: 接口返回数据
+    返回:
+        str: 小写后的合并文本
+        AI by zb
+    """
+    if not isinstance(data, dict):
+        return ""
+
+    text_parts = [
+        str(data.get("message") or "").strip(),
+        str(data.get("rawMessage") or "").strip(),
+        str(data.get("status") or "").strip(),
+        str(data.get("state") or "").strip(),
+    ]
+    nested_data = data.get("data")
+    if isinstance(nested_data, dict):
+        text_parts.extend(
+            [
+                str(nested_data.get("message") or "").strip(),
+                str(nested_data.get("rawMessage") or "").strip(),
+                str(nested_data.get("status") or "").strip(),
+                str(nested_data.get("state") or "").strip(),
+            ]
+        )
+    return " ".join(part for part in text_parts if part).strip().lower()
+
+
+def _is_terminal_activation_state(state: str) -> bool:
+    """
+    判断激活任务状态是否已进入终态。
+
+    参数:
+        state: 标准化状态值
+    返回:
+        bool: 是否终态
+        AI by zb
+    """
+    return state in {"completed", "success", "succeeded", "done", "failed", "cancelled", "canceled"}
+
+
+def _is_processing_activation_response(data: Optional[Dict[str, Any]]) -> bool:
+    """
+    判断激活提交响应是否属于“请求已受理，等待后续轮询”的中间态。
+
+    参数:
+        data: 激活提交接口响应
+    返回:
+        bool: 是否为处理中中间态
+        AI by zb
+    """
+    if not isinstance(data, dict):
+        return False
+
+    normalized_state = _normalize_activation_state(data)
+    if _is_terminal_activation_state(normalized_state):
+        return False
+
+    combined_text = _collect_activation_response_text(data)
+    failure_keywords = (
+        "失败",
+        "错误",
+        "异常",
+        "取消",
+        "已取消",
+        "拒绝",
+        "无效",
+        "失效",
+        "过期",
+        "退回",
+        "重试",
+        "重新获取",
+        "token 无效",
+        "token无效",
+        "fail",
+        "failed",
+        "error",
+        "cancelled",
+        "canceled",
+        "denied",
+        "invalid",
+    )
+    processing_keywords = (
+        "已收到请求",
+        "正在生成",
+        "生成支付链接",
+        "正在处理",
+        "处理中",
+        "当前状态",
+        "次查询",
+        "请稍候",
+        "请等待",
+        "稍候",
+        "等待",
+        "排队",
+        "队列",
+        "received",
+        "accepted",
+        "processing",
+        "pending",
+        "queued",
+        "queue",
+        "running",
+        "working",
+        "in progress",
+        "request received",
+    )
+
+    if any(keyword in combined_text for keyword in failure_keywords):
+        return False
+    if any(keyword in combined_text for keyword in processing_keywords):
+        return True
+    return False
+
+
+def _build_activation_result_from_snapshot(
+    action_label: str,
+    access_token: str,
+    request_id: str,
+    snapshot_data: Optional[Dict[str, Any]] = None,
+    accepted: bool = False,
+) -> PlusActivationResult:
+    """
+    基于激活任务快照构造统一结果对象。
+
+    参数:
+        action_label: 激活类型显示名称
+        access_token: ChatGPT accessToken
+        request_id: 激活任务 requestId
+        snapshot_data: 任务状态快照
+        accepted: 是否已确认请求提交成功
+    返回:
+        PlusActivationResult: 统一结果对象
+        AI by zb
+    """
+    normalized_snapshot = dict(snapshot_data or {})
+    normalized_state = _normalize_activation_state(normalized_snapshot)
+    is_terminal = _is_terminal_activation_state(normalized_state)
+    is_cancelled = _is_cancelled_activation_result(normalized_snapshot)
+    is_completed = is_terminal and not is_cancelled and _infer_activation_success(normalized_snapshot)
+
+    if is_completed:
+        stage = "completed"
+    elif is_cancelled:
+        stage = "cancelled"
+    elif is_terminal:
+        stage = "activate"
+    elif accepted:
+        stage = "submitted"
+    else:
+        stage = "activate"
+
+    status_text = str(normalized_snapshot.get("status") or normalized_snapshot.get("state") or "").strip()
+    if not status_text:
+        if stage == "submitted":
+            status_text = "处理中"
+        elif stage == "completed":
+            status_text = "success"
+        elif stage == "cancelled":
+            status_text = "cancelled"
+        elif normalized_state:
+            status_text = normalized_state
+        else:
+            status_text = "unknown"
+
+    message_text = str(
+        normalized_snapshot.get("message")
+        or normalized_snapshot.get("rawMessage")
+        or ""
+    ).strip()
+    if not message_text:
+        if stage == "submitted":
+            message_text = f"{action_label}激活请求已提交"
+        elif stage == "completed":
+            message_text = f"{action_label}激活成功"
+        elif stage == "cancelled":
+            message_text = f"{action_label}激活已取消"
+        elif is_terminal:
+            message_text = f"{action_label}激活失败"
+
+    accepted_flag = bool(is_completed or (accepted and stage == "submitted"))
+
+    return PlusActivationResult(
+        success=is_completed,
+        stage=stage,
+        accepted=accepted_flag,
+        access_token=access_token,
+        request_id=str(request_id or "").strip(),
+        status=status_text,
+        message=message_text,
+        response_data=normalized_snapshot,
+    )
+
+
+def _build_submitted_activation_result(
+    action_label: str,
+    access_token: str,
+    request_id: str,
+    submit_data: Optional[Dict[str, Any]] = None,
+) -> PlusActivationResult:
+    """
+    基于激活提交响应构造“已提交待处理”的结果对象。
+
+    参数:
+        action_label: 激活类型显示名称
+        access_token: ChatGPT accessToken
+        request_id: 激活任务 requestId
+        submit_data: 激活提交接口响应
+    返回:
+        PlusActivationResult: 已提交结果
+        AI by zb
+    """
+    normalized_submit_data = dict(submit_data or {})
+    normalized_state = _normalize_activation_state(normalized_submit_data)
+    if _is_terminal_activation_state(normalized_state):
+        terminal_success = _infer_activation_success(normalized_submit_data)
+        return _build_activation_result_from_snapshot(
+            action_label=action_label,
+            access_token=access_token,
+            request_id=request_id,
+            snapshot_data=normalized_submit_data,
+            accepted=terminal_success,
+        )
+
+    accepted = _is_processing_activation_response(normalized_submit_data)
+    if not accepted:
+        status_text = "unknown"
+        message_text = str(
+            normalized_submit_data.get("message")
+            or normalized_submit_data.get("rawMessage")
+            or ""
+        ).strip() or f"{action_label}激活请求未被受理"
+        return PlusActivationResult(
+            success=False,
+            stage="activate",
+            accepted=False,
+            access_token=access_token,
+            request_id=str(request_id or "").strip(),
+            status=status_text,
+            message=message_text,
+            response_data=normalized_submit_data,
+        )
+
+    status_text = str(
+        normalized_submit_data.get("status")
+        or normalized_submit_data.get("state")
+        or ""
+    ).strip() or "处理中"
+    message_text = str(
+        normalized_submit_data.get("message")
+        or normalized_submit_data.get("rawMessage")
+        or ""
+    ).strip() or f"{action_label}激活请求已提交"
+
+    return PlusActivationResult(
+        success=False,
+        stage="submitted",
+        accepted=True,
+        access_token=access_token,
+        request_id=str(request_id or "").strip(),
+        status=status_text,
+        message=message_text,
+        response_data=normalized_submit_data,
+    )
+
+
+def _summarize_activation_snapshot(snapshot_data: Optional[Dict[str, Any]]) -> str:
+    """
+    提取激活任务快照里的核心判定字段，便于日志输出。
+
+    参数:
+        snapshot_data: 任务状态快照
+    返回:
+        str: 摘要文本
+        AI by zb
+    """
+    data = dict(snapshot_data or {})
+    state_text = str(data.get("state") or "").strip() or "unknown"
+    success_value = data.get("success")
+    success_text = "null" if success_value is None else str(success_value).strip()
+    status_text = str(data.get("status") or "").strip() or "unknown"
+    return f"state={state_text} success={success_text} status={status_text}"
+
+
+def _is_pending_activation_result(result: PlusActivationResult) -> bool:
+    """
+    判断当前激活结果是否仍处于已提交待轮询状态。
+
+    参数:
+        result: 激活结果
+    返回:
+        bool: 是否仍需继续轮询
+        AI by zb
+    """
+    return (
+        isinstance(result, PlusActivationResult)
+        and not bool(result.success)
+        and bool(result.accepted)
+        and str(result.stage or "").strip().lower() == "submitted"
+    )
 
 
 def _ensure_chatgpt_origin(driver) -> None:
@@ -564,6 +996,48 @@ def get_service_status() -> Dict[str, Any]:
     return _request_json("GET", "/api/v1/status")
 
 
+def get_request_status(request_id: str) -> Dict[str, Any]:
+    """
+    查询指定激活任务的当前状态。
+
+    参数:
+        request_id: 任务请求 ID
+    返回:
+        Dict[str, Any]: RequestStatusResponse
+        AI by zb
+    """
+    normalized_request_id = str(request_id or "").strip()
+    if not normalized_request_id:
+        raise RuntimeError("缺少 requestId，无法查询激活任务状态")
+    return _request_json("GET", f"/api/v1/requests/{normalized_request_id}")
+
+
+def query_activation_request_result(
+    request_id: str,
+    action_label: str = "激活",
+    access_token: str = "",
+) -> PlusActivationResult:
+    """
+    查询指定激活任务，并转换为统一结果对象。
+
+    参数:
+        request_id: 任务请求 ID
+        action_label: 激活类型显示名称
+        access_token: 可选的 accessToken
+    返回:
+        PlusActivationResult: 统一结果对象
+        AI by zb
+    """
+    status_data = get_request_status(request_id)
+    return _build_activation_result_from_snapshot(
+        action_label=action_label,
+        access_token=str(access_token or "").strip(),
+        request_id=request_id,
+        snapshot_data=status_data,
+        accepted=True,
+    )
+
+
 def cancel_active_activation(
     expected_request_id: str = "",
     expected_action: str = "",
@@ -693,6 +1167,8 @@ def request_team_activation(access_token: str) -> tuple[Optional[Dict[str, Any]]
 def wait_for_active_request_id_after_timeout(
     timeout_seconds: int = ACTIVATION_TIMEOUT_STATUS_POLL_SECONDS,
     action_keywords: Optional[tuple[str, ...]] = None,
+    should_cancel: Optional[Callable[[], bool]] = None,
+    action_label: str = "激活",
 ) -> Optional[str]:
     """
     提交超时后，轮询服务状态以获取当前激活任务 requestId。
@@ -713,6 +1189,7 @@ def wait_for_active_request_id_after_timeout(
     )
 
     while time.time() < deadline:
+        _ensure_activation_not_cancelled(should_cancel, action_label)
         try:
             status_data = get_service_status()
         except Exception as exc:
@@ -744,6 +1221,7 @@ def _activate_with_access_token(
     cache_scope: str,
     action_keywords: tuple[str, ...],
     use_cache: bool = True,
+    should_cancel: Optional[Callable[[], bool]] = None,
 ) -> PlusActivationResult:
     """
     直接使用已有 accessToken 调用指定激活接口。
@@ -774,20 +1252,23 @@ def _activate_with_access_token(
             print(f"♻️ 检测到短时间内重复的 {action_label} 激活请求，直接复用上次结果")
             return cached_result
 
+    request_id = ""
     try:
+        _ensure_activation_not_cancelled(should_cancel, action_label)
         submit_data, timed_out = _request_activation(
             normalized_token,
             activation_path=activation_path,
             action_label=action_label,
         )
-        request_id = ""
-        final_data: Optional[Dict[str, Any]] = submit_data
+        submit_snapshot = dict(submit_data or {}) if isinstance(submit_data, dict) else {}
 
         if timed_out:
             request_id = str(
                 wait_for_active_request_id_after_timeout(
                     timeout_seconds=ACTIVATION_TIMEOUT_STATUS_POLL_SECONDS,
                     action_keywords=action_keywords,
+                    should_cancel=should_cancel,
+                    action_label=action_label,
                 )
                 or ""
             ).strip()
@@ -798,36 +1279,46 @@ def _activate_with_access_token(
                     access_token=normalized_token,
                     message=f"{action_label}激活请求已发送但响应超时，120秒内未获取到任务ID",
                 )
-            final_data = poll_request_status(
-                request_id,
-                timeout_seconds=ACTIVATION_TIMEOUT_STATUS_POLL_SECONDS,
-            )
+            if not submit_snapshot:
+                submit_snapshot = {
+                    "requestId": request_id,
+                    "status": "处理中",
+                    "message": f"{action_label}激活请求已提交，请改用 requestId 轮询最终状态",
+                }
         else:
-            request_id = str((submit_data or {}).get("requestId") or "").strip()
-            if request_id:
-                final_data = poll_request_status(request_id)
+            request_id = _extract_request_id(submit_snapshot)
 
-        if not isinstance(final_data, dict):
-            raise RuntimeError("未获取到有效的激活结果")
+        if not submit_snapshot and not request_id:
+            raise RuntimeError("激活请求已提交，但未收到可用响应数据")
 
-        success = bool(final_data.get("success"))
-        final_state = str(final_data.get("state") or final_data.get("status") or "").strip().lower()
-        is_cancelled = final_state in {"cancelled", "canceled"}
-        result_message = str(final_data.get("message") or final_data.get("rawMessage") or "").strip()
-        if is_cancelled and not result_message:
-            result_message = f"{action_label}激活已取消"
-        result = PlusActivationResult(
-            success=success,
-            stage="completed" if success else ("cancelled" if is_cancelled else "activate"),
+        if request_id and "requestId" not in submit_snapshot:
+            submit_snapshot["requestId"] = request_id
+        result = _build_submitted_activation_result(
+            action_label=action_label,
             access_token=normalized_token,
             request_id=request_id,
-            status=str(final_data.get("status") or final_data.get("state") or "").strip(),
-            message=result_message,
-            response_data=final_data,
+            submit_data=submit_snapshot,
         )
-        if use_cache and not is_cancelled and (request_id or submit_data is not None):
+        if _is_pending_activation_result(result):
+            result = _poll_submitted_activation_result(
+                action_label=action_label,
+                access_token=normalized_token,
+                result=result,
+                action_keywords=action_keywords,
+                should_cancel=should_cancel,
+            )
+        if use_cache and (result.success or result.accepted) and result.stage != "cancelled" and (request_id or submit_data is not None):
             _set_cached_plus_result(normalized_token, result, cache_scope=cache_scope)
         return result
+    except ManualActivationCancelledError as exc:
+        return PlusActivationResult(
+            success=False,
+            stage="cancelled",
+            accepted=bool(request_id),
+            access_token=normalized_token,
+            request_id=request_id,
+            message=str(exc),
+        )
     except Exception as exc:
         return PlusActivationResult(
             success=False,
@@ -837,7 +1328,11 @@ def _activate_with_access_token(
         )
 
 
-def activate_plus_with_access_token(access_token: str, use_cache: bool = True) -> PlusActivationResult:
+def activate_plus_with_access_token(
+    access_token: str,
+    use_cache: bool = True,
+    should_cancel: Optional[Callable[[], bool]] = None,
+) -> PlusActivationResult:
     """
     直接使用已有 accessToken 调用 Plus 激活接口。
 
@@ -854,10 +1349,15 @@ def activate_plus_with_access_token(access_token: str, use_cache: bool = True) -
         cache_scope="plus",
         action_keywords=("plus",),
         use_cache=use_cache,
+        should_cancel=should_cancel,
     )
 
 
-def activate_team_with_access_token(access_token: str, use_cache: bool = True) -> PlusActivationResult:
+def activate_team_with_access_token(
+    access_token: str,
+    use_cache: bool = True,
+    should_cancel: Optional[Callable[[], bool]] = None,
+) -> PlusActivationResult:
     """
     直接使用已有 accessToken 调用 Team 激活接口。
 
@@ -874,12 +1374,15 @@ def activate_team_with_access_token(access_token: str, use_cache: bool = True) -
         cache_scope="team",
         action_keywords=("team",),
         use_cache=use_cache,
+        should_cancel=should_cancel,
     )
 
 
 def poll_request_status(
     request_id: str,
     timeout_seconds: Optional[int] = None,
+    should_cancel: Optional[Callable[[], bool]] = None,
+    action_label: str = "激活",
 ) -> Dict[str, Any]:
     """
     轮询异步任务状态直到结束。
@@ -898,18 +1401,107 @@ def poll_request_status(
     )
     poll_interval = max(int(cfg.activation_api.poll_interval), 1)
     deadline = time.time() + effective_timeout_seconds
+    poll_failure_count = 0
+    last_poll_error = ""
 
     while time.time() < deadline:
-        status_data = _request_json("GET", f"/api/v1/requests/{request_id}")
+        _ensure_activation_not_cancelled(should_cancel, action_label)
+        try:
+            status_data = get_request_status(request_id)
+        except Exception as exc:
+            poll_failure_count += 1
+            last_poll_error = str(exc or "").strip()
+            print(
+                f"⚠️ 激活任务轮询失败，第 {poll_failure_count} 次沿用原 requestId 继续查询: "
+                f"requestId={request_id} | {last_poll_error or exc}"
+            )
+            time.sleep(poll_interval)
+            continue
+
+        poll_failure_count = 0
         state = str(status_data.get("state") or "").strip().lower()
-        print(f"⏳ 激活任务轮询中: requestId={request_id} state={state or 'unknown'}")
+        print(
+            f"⏳ 激活任务轮询中: requestId={request_id} "
+            f"{_summarize_activation_snapshot(status_data)}"
+        )
 
         if state in {"completed", "failed", "cancelled"}:
             return status_data
 
         time.sleep(poll_interval)
 
-    raise TimeoutError(f"任务轮询超时: requestId={request_id}")
+    timeout_message = f"任务轮询超时: requestId={request_id}"
+    if last_poll_error:
+        timeout_message = f"{timeout_message} | 最近一次轮询错误: {last_poll_error}"
+    raise TimeoutError(timeout_message)
+
+
+def _poll_submitted_activation_result(
+    action_label: str,
+    access_token: str,
+    result: PlusActivationResult,
+    action_keywords: tuple[str, ...],
+    should_cancel: Optional[Callable[[], bool]] = None,
+) -> PlusActivationResult:
+    """
+    对已提交的激活任务执行阻塞轮询，直到进入终态。
+
+    参数:
+        action_label: 激活类型显示名称
+        access_token: ChatGPT accessToken
+        result: 激活提交结果
+        action_keywords: 活动任务匹配关键字
+        should_cancel: 取消检查函数
+    返回:
+        PlusActivationResult: 终态结果
+        AI by zb
+    """
+    request_id = str(result.request_id or "").strip()
+    if not request_id:
+        request_id = str(
+            wait_for_active_request_id_after_timeout(
+                timeout_seconds=ACTIVATION_TIMEOUT_STATUS_POLL_SECONDS,
+                action_keywords=action_keywords,
+                should_cancel=should_cancel,
+                action_label=action_label,
+            )
+            or ""
+        ).strip()
+        if not request_id:
+            return PlusActivationResult(
+                success=False,
+                stage="activate",
+                accepted=False,
+                access_token=access_token,
+                message=f"{action_label}激活请求已提交，但未获取到可轮询的 requestId",
+                response_data=dict(result.response_data or {}),
+            )
+
+    print(f"🔄 {action_label} 激活已提交，开始阻塞轮询最终结果: requestId={request_id}")
+    final_snapshot = poll_request_status(
+        request_id=request_id,
+        should_cancel=should_cancel,
+        action_label=action_label,
+    )
+    final_result = _build_activation_result_from_snapshot(
+        action_label=action_label,
+        access_token=access_token,
+        request_id=request_id,
+        snapshot_data=final_snapshot,
+        accepted=True,
+    )
+    snapshot_summary = _summarize_activation_snapshot(final_snapshot)
+
+    if final_result.success:
+        print(f"✅ {action_label} 激活轮询完成: requestId={request_id} {snapshot_summary}")
+    elif str(final_result.stage or "").strip().lower() == "cancelled":
+        print(f"🛑 {action_label} 激活任务已取消: requestId={request_id} {snapshot_summary}")
+    else:
+        print(
+            f"❌ {action_label} 激活轮询结束但未成功: requestId={request_id} | "
+            f"{snapshot_summary} | {final_result.message or final_result.status or final_result.stage}"
+        )
+    return final_result
 
 
 def _activate_with_browser_session(
@@ -917,6 +1509,7 @@ def _activate_with_browser_session(
     action_label: str,
     activation_handler,
     use_cache: bool = True,
+    should_cancel: Optional[Callable[[], bool]] = None,
 ) -> PlusActivationResult:
     """
     完整执行“提取 accessToken + 调用激活接口 + 轮询结果”流程。
@@ -952,7 +1545,11 @@ def _activate_with_browser_session(
             stage="fetch_token",
             message=str(exc),
         )
-    result = activation_handler(access_token, use_cache=use_cache)
+    result = activation_handler(
+        access_token,
+        use_cache=use_cache,
+        should_cancel=should_cancel,
+    )
     result.session_info = session_info
     if isinstance(result.response_data, dict):
         result.response_data["sessionInfo"] = session_info
@@ -960,7 +1557,11 @@ def _activate_with_browser_session(
     return result
 
 
-def activate_plus_with_browser_session(driver, use_cache: bool = True) -> PlusActivationResult:
+def activate_plus_with_browser_session(
+    driver,
+    use_cache: bool = True,
+    should_cancel: Optional[Callable[[], bool]] = None,
+) -> PlusActivationResult:
     """
     完整执行“提取 accessToken + 调用 Plus 激活接口 + 轮询结果”流程。
 
@@ -975,10 +1576,15 @@ def activate_plus_with_browser_session(driver, use_cache: bool = True) -> PlusAc
         "Plus",
         activate_plus_with_access_token,
         use_cache=use_cache,
+        should_cancel=should_cancel,
     )
 
 
-def activate_team_with_browser_session(driver, use_cache: bool = True) -> PlusActivationResult:
+def activate_team_with_browser_session(
+    driver,
+    use_cache: bool = True,
+    should_cancel: Optional[Callable[[], bool]] = None,
+) -> PlusActivationResult:
     """
     完整执行“提取 accessToken + 调用 Team 激活接口 + 轮询结果”流程。
 
@@ -993,4 +1599,5 @@ def activate_team_with_browser_session(driver, use_cache: bool = True) -> PlusAc
         "Team",
         activate_team_with_access_token,
         use_cache=use_cache,
+        should_cancel=should_cancel,
     )

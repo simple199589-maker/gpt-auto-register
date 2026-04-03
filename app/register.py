@@ -480,6 +480,40 @@ def complete_registered_account_flow(
             handle_sub2api_auto_upload(email, "已激活Plus，未上传Sub2Api", report_callback=report_callback)
             return
 
+        if str(activation_result.stage or "").strip().lower() == "submitted":
+            print("📨 Plus 激活请求已提交，等待远端任务完成")
+            if activation_result.request_id:
+                print(f"   requestId: {activation_result.request_id}")
+            if activation_result.status:
+                print(f"   状态: {activation_result.status}")
+            update_account_status(
+                email,
+                "Plus激活已提交",
+                access_token=activation_result.access_token or None,
+                extra={
+                    "mailboxContext": mailbox_context,
+                    "registrationStatus": "success",
+                    "overallStatus": "pending",
+                    "sessionInfo": activation_result.session_info,
+                    "plusCalled": True,
+                    "plusSuccess": False,
+                    "plusState": "pending",
+                    "plusStatus": activation_result.status or "处理中",
+                    "plusMessage": activation_result.message,
+                    "plusRequestId": activation_result.request_id,
+                    "plusCalledAt": time.strftime("%Y%m%d_%H%M%S"),
+                    "sub2apiUploaded": False,
+                    "sub2apiState": "pending",
+                    "sub2apiStatus": "待上传",
+                    "sub2apiMessage": "等待 Plus 激活完成后再触发上传",
+                    "sub2apiAutoUploadEnabled": is_sub2api_auto_upload_enabled(),
+                    "lastError": "",
+                },
+            )
+            if report_callback:
+                report_callback("plus_activation_submitted")
+            return
+
         print(f"⚠️ Plus 绑定流程失败: {activation_result.message}")
         if activation_result.stage == "config":
             update_account_status(

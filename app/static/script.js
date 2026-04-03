@@ -109,6 +109,8 @@ function formatTimeCompact(value) {
     return `${match[2]}-${match[3]} ${match[4]}:${match[5]}`
 }
 
+const DELIVERY_VENDOR_STORAGE_KEY = 'gpt-auto-register.delivery-vendor'
+
 function resolveStatusTone(kind) {
     if (kind === 'failed') {
         return 'danger'
@@ -153,6 +155,9 @@ function classifyPlusStatus(record) {
     }
     if (plusStatus.includes('关闭') || plusStatus.includes('跳过')) {
         return 'disabled'
+    }
+    if (plusStatus.includes('处理中') || plusStatus.includes('取消中') || plusStatus.includes('已提交')) {
+        return 'pending'
     }
     if (!record || (!record.plusCalled && !plusStatus)) {
         return 'idle'
@@ -206,6 +211,17 @@ const app = createApp({
         const logContainerRef = ref(null)
         const accountActionLoading = reactive({})
         const actionPopoverOpen = reactive({})
+        const showManualAccountPanel = ref(false)
+        const manualAccountSubmitting = ref(false)
+        const lastActivationRefreshAt = ref(0)
+        const manualAccountForm = reactive({
+            email: '',
+            password: '',
+            accessToken: ''
+        })
+        const deliverySettings = reactive({
+            vendor: window.localStorage.getItem(DELIVERY_VENDOR_STORAGE_KEY) || '咸鱼'
+        })
         const serverSettings = reactive({
             plus_auto_activate_enabled: false,
             sub2api_auto_upload_enabled: false,
@@ -240,6 +256,10 @@ const app = createApp({
             { title: '时间', dataIndex: 'time', key: 'time', width: 116 },
             { title: '', key: 'actions', width: 64, fixed: 'right' }
         ]
+
+        function persistDeliverySettings() {
+            window.localStorage.setItem(DELIVERY_VENDOR_STORAGE_KEY, String(deliverySettings.vendor || '').trim() || '咸鱼')
+        }
 
         const totalAccountPages = computed(() => {
             return Math.max(Number(accountPagination.totalPages || 1), 1)
@@ -336,6 +356,14 @@ const app = createApp({
                     logs.value.push(...data.logs)
                     logIndex.value += data.logs.length
                 }
+
+                if (currentTab.value === 'accounts' && !accountsLoading.value && !isActivationPipelineBusy()) {
+                    const now = Date.now()
+                    if (now - Number(lastActivationRefreshAt.value || 0) >= 5000) {
+                        lastActivationRefreshAt.value = now
+                        void refreshPendingActivationStatuses(true)
+                    }
+                }
             } catch (error) {
                 console.error('Polling error:', error)
             }
@@ -351,6 +379,24 @@ const app = createApp({
                 window.clearInterval(pollTimer.value)
                 pollTimer.value = null
             }
+        }
+
+        /**
+         * 判断当前页面是否已有手动 Plus / Team 激活线路在执行。
+         *
+         * @author AI by zb
+         */
+        function isActivationPipelineBusy() {
+            const action = String(currentAction.value || '').trim().toLowerCase()
+            if (!action) {
+                return false
+            }
+            const actionLabel = action.split(':', 1)[0].split('：', 1)[0]
+            return (
+                actionLabel.includes('plus')
+                || actionLabel.includes('team')
+                || actionLabel.includes('激活')
+            )
         }
 
         async function startTask() {
@@ -480,6 +526,10 @@ const app = createApp({
                     accountPagination.current = accountPagination.totalPages
                     return
                 }
+                if (!isActivationPipelineBusy()) {
+                    lastActivationRefreshAt.value = Date.now()
+                    void refreshPendingActivationStatuses(true)
+                }
             } catch (error) {
                 showError(error.message)
                 accounts.value = []
@@ -487,6 +537,169 @@ const app = createApp({
                 accountPagination.totalPages = 1
             } finally {
                 accountsLoading.value = false
+            }
+        }
+
+        /**
+         * 判断指定账号是否需要继续刷新激活状态。
+         *
+         * @author AI by zb
+         */
+        function shouldRefreshActivationStatus(record) {
+            const requestId = String(record && record.plusRequestId || '').trim()
+            const plusState = String(record && record.plusState || '').trim().toLowerCase()
+            const plusStatus = String(record && record.plusStatus || '').trim()
+
+            if (!record || !record.email || !requestId) {
+                return false
+            }
+            return (
+                plusState === 'pending'
+                || plusStatus.includes('处理中')
+                || plusStatus.includes('取消中')
+                || plusStatus.includes('已提交')
+            )
+        }
+
+        /**
+         * 将后端返回的最新账号记录合并到当前列表。
+         *
+         * @author AI by zb
+         */
+        function mergeAccountRecord(nextRecord) {
+            const normalizedEmail = String(nextRecord && nextRecord.email || '').trim().toLowerCase()
+            if (!normalizedEmail) {
+                return
+            }
+
+            const targetIndex = accounts.value.findIndex((item) => {
+                return String(item && item.email || '').trim().toLowerCase() === normalizedEmail
+            })
+            if (targetIndex < 0) {
+                return
+            }
+            accounts.value.splice(targetIndex, 1, nextRecord)
+        }
+
+        /**
+         * 按 requestId 刷新单个账号的激活状态。
+         *
+         * @author AI by zb
+         */
+        async function refreshActivationStatus(record, silent = true) {
+            if (!shouldRefreshActivationStatus(record)) {
+                return
+            }
+
+            const email = String(record && record.email || '').trim()
+            const actionKey = buildActionKey('/api/accounts/refresh-activation', email)
+            if (accountActionLoading[actionKey]) {
+                return
+            }
+
+            accountActionLoading[actionKey] = true
+            try {
+                const data = await requestJson('/api/accounts/refresh-activation', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email })
+                })
+                if (data && data.account) {
+                    mergeAccountRecord(data.account)
+                }
+            } catch (error) {
+                if (!silent) {
+                    showError(`${email}\n${error.message}`)
+                }
+            } finally {
+                accountActionLoading[actionKey] = false
+            }
+        }
+
+        /**
+         * 批量刷新当前列表中处于处理中状态的激活任务。
+         *
+         * @author AI by zb
+         */
+        async function refreshPendingActivationStatuses(silent = true) {
+            const pendingRecords = accounts.value.filter((record) => shouldRefreshActivationStatus(record))
+            for (const record of pendingRecords) {
+                await refreshActivationStatus(record, silent)
+            }
+        }
+
+        /**
+         * 重置手动新增账号表单。
+         *
+         * @author AI by zb
+         */
+        function resetManualAccountForm() {
+            manualAccountForm.email = ''
+            manualAccountForm.password = ''
+            manualAccountForm.accessToken = ''
+        }
+
+        /**
+         * 关闭手动新增账号面板并清空输入。
+         *
+         * @author AI by zb
+         */
+        function closeManualAccountPanel() {
+            showManualAccountPanel.value = false
+            resetManualAccountForm()
+        }
+
+        /**
+         * 切换手动新增账号面板显示状态。
+         *
+         * @author AI by zb
+         */
+        function toggleManualAccountPanel() {
+            if (showManualAccountPanel.value) {
+                closeManualAccountPanel()
+                return
+            }
+            showManualAccountPanel.value = true
+        }
+
+        /**
+         * 提交手动新增账号请求。
+         *
+         * @author AI by zb
+         */
+        async function submitManualAccount() {
+            const email = String(manualAccountForm.email || '').trim().toLowerCase()
+            const password = String(manualAccountForm.password || '').trim()
+            const accessToken = String(manualAccountForm.accessToken || '').trim()
+
+            if (!email) {
+                showError('请输入账号邮箱')
+                return
+            }
+            if (!password && !accessToken) {
+                showError('密码和 accessToken 至少填写一项')
+                return
+            }
+
+            manualAccountSubmitting.value = true
+            try {
+                const data = await requestJson('/api/accounts/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password, accessToken })
+                })
+
+                showSuccess(data && data.message ? data.message : '账号已添加')
+                closeManualAccountPanel()
+                if (accountPagination.current !== 1) {
+                    accountPagination.current = 1
+                } else {
+                    await loadAccounts()
+                }
+            } catch (error) {
+                showError(error.message)
+            } finally {
+                manualAccountSubmitting.value = false
             }
         }
 
@@ -504,6 +717,8 @@ const app = createApp({
                 return false
             }
             return [
+                '/api/accounts/deliver',
+                '/api/accounts/access-token',
                 '/api/accounts/update-status',
                 '/api/accounts/retry-registration',
                 '/api/accounts/retry-plus',
@@ -551,8 +766,10 @@ const app = createApp({
             return Boolean(
                 record
                 && (
-                    record.canEditStatus
+                    record.canDeliver
+                    || record.canEditStatus
                     || record.canDeleteAccount
+                    || record.canCopyAccessToken
                     || record.canRetryRegistration
                     || record.canRetryPlus
                     || record.canRetryTeam
@@ -597,6 +814,7 @@ const app = createApp({
                     showError(data.message || '操作失败')
                 }
                 await loadAccounts()
+                return data
             } catch (error) {
                 showError(`${email}\n${error.message}`)
             } finally {
@@ -615,6 +833,51 @@ const app = createApp({
                 }
             }
             await runAccountAction('/api/accounts/upload-sub2api', record.email)
+        }
+
+        async function handleDeliverAccount(record) {
+            if (!record || !record.email) {
+                return
+            }
+
+            const vendor = String(deliverySettings.vendor || '').trim() || '咸鱼'
+            const deliveryEmail = String(record.email || '').trim().toLowerCase()
+
+            const confirmed = window.confirm(`${record.email}\n将向 ${deliveryEmail} 发货，厂家标记为 ${vendor}，确认继续吗？`)
+            if (!confirmed) {
+                return
+            }
+
+            persistDeliverySettings()
+            const data = await runAccountAction('/api/accounts/deliver', record.email, { vendor })
+            if (data && data.tempAccessUrl) {
+                const openedWindow = window.open(data.tempAccessUrl, '_blank', 'noopener')
+                if (!openedWindow) {
+                    showError('发货已完成，但浏览器拦截了临时链接弹窗，请允许弹窗后重试')
+                }
+            }
+        }
+
+        async function handleCopyAccessToken(record) {
+            if (!record || !record.email) {
+                return
+            }
+
+            const actionKey = buildActionKey('/api/accounts/access-token', record.email)
+            accountActionLoading[actionKey] = true
+
+            try {
+                const data = await requestJson('/api/accounts/access-token', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email: record.email })
+                })
+                await copyText(data && data.accessToken ? data.accessToken : '', 'accessToken')
+            } catch (error) {
+                showError(`${record.email}\n${error.message}`)
+            } finally {
+                accountActionLoading[actionKey] = false
+            }
         }
 
         async function handleEditAccountStatus(record) {
@@ -668,6 +931,14 @@ const app = createApp({
             }
             if (actionKey === 'retryRegistration') {
                 await runAccountAction('/api/accounts/retry-registration', record.email)
+                return
+            }
+            if (actionKey === 'copyAccessToken') {
+                await handleCopyAccessToken(record)
+                return
+            }
+            if (actionKey === 'deliver') {
+                await handleDeliverAccount(record)
                 return
             }
             if (actionKey === 'retryPlus') {
@@ -806,6 +1077,13 @@ const app = createApp({
         }
 
         watch(
+            () => [deliverySettings.vendor],
+            () => {
+                persistDeliverySettings()
+            }
+        )
+
+        watch(
             () => [accountFilters.keyword, accountFilters.registration, accountFilters.overall, accountFilters.plus, accountFilters.sub2api],
             () => {
                 if (currentTab.value !== 'accounts') {
@@ -862,6 +1140,8 @@ const app = createApp({
             currentAction,
             currentTab,
             copyText,
+            closeManualAccountPanel,
+            deliverySettings,
             failCount,
             getAccountRowKey,
             getActionPopoverKey,
@@ -885,6 +1165,7 @@ const app = createApp({
             handleMenuClick,
             handleAccountActionMenu,
             handleCancelActivation,
+            handleCopyAccessToken,
             handleDeleteAccount,
             handleEditAccountStatus,
             handleGroupIdsBlur,
@@ -900,6 +1181,8 @@ const app = createApp({
             loadAccounts,
             logContainerRef,
             logs,
+            manualAccountForm,
+            manualAccountSubmitting,
             monitorStatusColor,
             monitorStatusText,
             monitorUrl,
@@ -907,15 +1190,19 @@ const app = createApp({
             pagedAccounts,
             paginationTotalText,
             resetAccountPagination,
+            resetManualAccountForm,
             runAccountAction,
             saveAutomationSettings,
             settings,
             settingsSaving,
             setActionPopoverOpen,
+            showManualAccountPanel,
             startTask,
             stopTask,
+            submitManualAccount,
             successCount,
             targetCount,
+            toggleManualAccountPanel,
             totalAccountPages,
             totalInventory
         }

@@ -135,6 +135,12 @@ curl "https://your.domain/api/session?admin_token=<JWT_TOKEN>"
 |------|------|------|
 | `length` | number | 可选，随机字符串长度 |
 | `domainIndex` | number | 可选，选择域名索引（默认 0） |
+| `mode` | string | 可选，生成模式：`classic` 为经典随机串，`human` 为真人风格邮箱（英文名、拼音名、语义词、出生年月/生日、常见数字随机组合） |
+
+**说明：**
+- 不传 `mode` 时默认使用 `classic`
+- `human` 模式会在上述规则中随机组合，并尽量贴近 `length` 控制邮箱本地部分长度，同时继续使用 `domainIndex` 选择域名
+- `human` 模式示例：`emma1998@example.com`、`wangwei88@example.com`、`sunny_cat520@example.com`
 
 **返回：**
 ```json
@@ -142,6 +148,11 @@ curl "https://your.domain/api/session?admin_token=<JWT_TOKEN>"
   "email": "abc123@example.com",
   "expires": 1704067200000
 }
+```
+
+**调用示例：**
+```bash
+curl "https://your.domain/api/generate?length=12&domainIndex=0&mode=human"
 ```
 
 ### POST /api/create
@@ -238,6 +249,48 @@ curl "https://your.domain/api/session?admin_token=<JWT_TOKEN>"
 ```json
 { "success": true, "pinned": true }
 ```
+
+### POST /api/mailboxes/temp-access
+为指定邮箱生成临时只读访问链接（仅管理员）
+
+**请求参数：**
+```json
+{
+  "address": "test@example.com"
+}
+```
+
+**返回：**
+```json
+{
+  "success": true,
+  "address": "test@example.com",
+  "code": "7f6e5d4c3b2a1908fedcba9876543210",
+  "url": "https://your.domain/info/7f6e5d4c3b2a1908fedcba9876543210"
+}
+```
+
+**错误码：**
+| 状态码 | 说明 |
+|------|------|
+| `400` | 缺少 `address` 或请求体格式错误 |
+| `403` | 仅管理员可生成临时授权 |
+| `404` | 邮箱不存在 |
+
+**说明：**
+- 每次生成都会写入 `mailboxes.temp_access_code`，再次生成会覆盖旧授权码，旧链接随之失效。
+- 当前实现未设置独立过期时间；如需立即失效，可重新生成新的临时授权链接覆盖旧码。
+- 返回的 `url` 是前端只读访问入口，格式为 `/info/{code}`。
+
+**临时访问码传递方式：**
+- 页面访问：`GET /info/{code}`
+- 请求头：`X-Temp-Access-Code: <code>`
+- 查询参数：`?temp_access_code=<code>`
+
+**临时访问权限范围：**
+- 允许访问：`GET /api/emails`、`GET /api/emails/batch`、`GET /api/email/:id`
+- 会话识别：`GET /api/session` 会返回 `temporaryAccess: true` 与 `readOnly: true`
+- 明确禁止：下载原始邮件、删除邮件、清空邮件，以及所有非 `GET` 的写操作
 
 ### POST /api/mailboxes/reset-password
 重置邮箱密码（仅 strictAdmin）

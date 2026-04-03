@@ -5,7 +5,7 @@ AI by zb
 
 from __future__ import annotations
 
-from typing import Dict, Tuple
+from typing import Callable, Dict, Optional, Tuple
 
 from app.browser.subscription import subscribe_plus_trial
 from app.config import cfg
@@ -124,7 +124,11 @@ def bind_plus_with_legacy_browser(driver) -> PlusActivationResult:
     )
 
 
-def run_plus_binding_with_access_token(access_token: str, use_cache: bool = True) -> PlusActivationResult:
+def run_plus_binding_with_access_token(
+    access_token: str,
+    use_cache: bool = True,
+    should_cancel: Optional[Callable[[], bool]] = None,
+) -> PlusActivationResult:
     """
     按当前配置执行 Plus 绑定；仅在接口激活模式下支持直接使用 accessToken。
 
@@ -141,10 +145,18 @@ def run_plus_binding_with_access_token(access_token: str, use_cache: bool = True
             access_token=str(access_token or "").strip(),
             message="当前 plus.mode 不支持仅凭 accessToken 执行，请改用浏览器模式重试",
         )
-    return activate_plus_via_api_with_access_token(access_token, use_cache=use_cache)
+    return activate_plus_via_api_with_access_token(
+        access_token,
+        use_cache=use_cache,
+        should_cancel=should_cancel,
+    )
 
 
-def run_plus_binding_with_browser_session(driver, use_cache: bool = True) -> PlusActivationResult:
+def run_plus_binding_with_browser_session(
+    driver,
+    use_cache: bool = True,
+    should_cancel: Optional[Callable[[], bool]] = None,
+) -> PlusActivationResult:
     """
     按当前配置执行 Plus 绑定浏览器流程。
 
@@ -157,4 +169,8 @@ def run_plus_binding_with_browser_session(driver, use_cache: bool = True) -> Plu
     mode = get_plus_binding_mode()
     if mode == PLUS_MODE_LEGACY_BROWSER:
         return bind_plus_with_legacy_browser(driver)
-    return activate_plus_via_api_with_browser_session(driver, use_cache=use_cache)
+    return activate_plus_via_api_with_browser_session(
+        driver,
+        use_cache=use_cache,
+        should_cancel=should_cancel,
+    )

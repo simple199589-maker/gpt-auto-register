@@ -16,9 +16,9 @@ registration:
 email:
   # Cloudflare Worker 地址 (必须修改)
   worker_url: "https://your-worker-name.your-subdomain.workers.dev"
-  
-  # 你的自定义域名 (必须修改)
-  domain: "your-custom-domain.com"
+
+  # 可选：邮箱域名索引列表，创建邮箱时会随机选择一个
+  domainIndex: [0]
   
   # 邮箱前缀长度
   prefix_length: 10
@@ -86,7 +86,7 @@ plus:
 # Plus 激活接口配置
 # ------------------------------------------------------------
 activation_api:
-  base_url: "https://bot.joini.cloud"
+  base_url: ["https://bot.joini.cloud", "http://127.0.0.1:8000"]  # 可配置多个地址，启动时可用 --api 选择索引
   api_key: "your_activation_api_key"
   bearer: ""
   poll_interval: 3

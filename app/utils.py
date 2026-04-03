@@ -128,6 +128,16 @@ ACCOUNT_RECORD_DEFAULTS = {
         "account_id": "",
     },
     "oauthOutputFile": "",
+    "deliveryInfo": {
+        "delivered": False,
+        "vendor": "",
+        "targetEmail": "",
+        "status": "",
+        "message": "",
+        "tempAccessUrl": "",
+        "mailId": "",
+        "deliveredAt": "",
+    },
 }
 
 
@@ -233,6 +243,19 @@ def _normalize_account_record(record: dict):
         "refresh_token": str(oauth_tokens.get("refresh_token") or ""),
         "id_token": str(oauth_tokens.get("id_token") or ""),
         "account_id": str(oauth_tokens.get("account_id") or ""),
+    }
+    delivery_info = normalized.get("deliveryInfo")
+    if not isinstance(delivery_info, dict):
+        delivery_info = {}
+    normalized["deliveryInfo"] = {
+        "delivered": bool((delivery_info or {}).get("delivered")),
+        "vendor": str((delivery_info or {}).get("vendor") or "").strip(),
+        "targetEmail": str((delivery_info or {}).get("targetEmail") or "").strip(),
+        "status": str((delivery_info or {}).get("status") or "").strip(),
+        "message": str((delivery_info or {}).get("message") or "").strip(),
+        "tempAccessUrl": str((delivery_info or {}).get("tempAccessUrl") or "").strip(),
+        "mailId": str((delivery_info or {}).get("mailId") or "").strip(),
+        "deliveredAt": str((delivery_info or {}).get("deliveredAt") or "").strip(),
     }
 
     status = normalized["status"]

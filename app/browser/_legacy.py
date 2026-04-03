@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import time
+from datetime import date
 from pathlib import Path
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
@@ -32,6 +33,14 @@ from app.utils import generate_user_info, generate_billing_info
 
 _CHROME_MAJOR_VERSION_CACHE = None
 _CHROMEDRIVER_MAJOR_VERSION_CACHE: dict[str, int | None] = {}
+VISIBLE_WINDOW_X = 24
+VISIBLE_WINDOW_Y = 24
+VISIBLE_WINDOW_WIDTH = 1440
+VISIBLE_WINDOW_HEIGHT = 960
+OFFSCREEN_WINDOW_X = -10000
+OFFSCREEN_WINDOW_Y = -10000
+OFFSCREEN_WINDOW_WIDTH = 1920
+OFFSCREEN_WINDOW_HEIGHT = 1080
 CHATGPT_HOME_URLS = [
     "https://chatgpt.com/",
     "https://chatgpt.com",
@@ -363,9 +372,8 @@ def _build_chrome_options(headless: bool, detach: bool):
 
     if headless:
         print("  👻 使用'伪无头'模式 (Off-screen) 以绕过检测...")
-        options.add_argument("--window-position=-10000,-10000")
-        options.add_argument("--window-size=1920,1080")
-        options.add_argument("--start-maximized") # 可能会覆盖 position，但在多屏下通常有效
+        options.add_argument(f"--window-position={OFFSCREEN_WINDOW_X},{OFFSCREEN_WINDOW_Y}")
+        options.add_argument(f"--window-size={OFFSCREEN_WINDOW_WIDTH},{OFFSCREEN_WINDOW_HEIGHT}")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
@@ -374,6 +382,104 @@ def _build_chrome_options(headless: bool, detach: bool):
         options.add_argument("--lang=zh-CN,zh;q=0.9,en;q=0.8")
 
     return options
+
+
+def _set_browser_window_bounds(driver, x: int, y: int, width: int, height: int) -> None:
+    """
+    尽量统一设置浏览器窗口的位置与尺寸。
+
+    参数:
+        driver: 浏览器驱动
+        x: 左上角横坐标
+        y: 左上角纵坐标
+        width: 窗口宽度
+        height: 窗口高度
+        AI by zb
+    """
+    target_x = int(x)
+    target_y = int(y)
+    target_width = max(int(width), 1)
+    target_height = max(int(height), 1)
+
+    try:
+        driver.set_window_rect(
+            x=target_x,
+            y=target_y,
+            width=target_width,
+            height=target_height,
+        )
+        return
+    except Exception:
+        pass
+
+    try:
+        driver.set_window_position(target_x, target_y)
+    except Exception:
+        pass
+
+    try:
+        driver.set_window_size(target_width, target_height)
+    except Exception:
+        pass
+
+
+def _activate_browser_page(driver) -> None:
+    """
+    尽量激活当前浏览器窗口与标签页，减少显示模式下的失焦问题。
+
+    参数:
+        driver: 浏览器驱动
+        AI by zb
+    """
+    try:
+        current_handle = driver.current_window_handle
+        driver.switch_to.window(current_handle)
+    except Exception:
+        pass
+
+    try:
+        driver.execute_cdp_cmd("Page.bringToFront", {})
+    except Exception:
+        pass
+
+    try:
+        driver.execute_script("window.focus();")
+    except Exception:
+        pass
+
+
+def _stabilize_browser_window(driver, visible: bool) -> None:
+    """
+    根据显示模式整理浏览器窗口状态，避免可见模式失焦或隐藏模式误弹窗。
+
+    参数:
+        driver: 浏览器驱动
+        visible: 是否应显示浏览器窗口
+        AI by zb
+    """
+    if visible:
+        _set_browser_window_bounds(
+            driver,
+            VISIBLE_WINDOW_X,
+            VISIBLE_WINDOW_Y,
+            VISIBLE_WINDOW_WIDTH,
+            VISIBLE_WINDOW_HEIGHT,
+        )
+        try:
+            driver.maximize_window()
+        except Exception:
+            pass
+        time.sleep(0.2)
+        _activate_browser_page(driver)
+        return
+
+    _set_browser_window_bounds(
+        driver,
+        OFFSCREEN_WINDOW_X,
+        OFFSCREEN_WINDOW_Y,
+        OFFSCREEN_WINDOW_WIDTH,
+        OFFSCREEN_WINDOW_HEIGHT,
+    )
 
 
 def create_driver(headless=False, detach=False):
@@ -509,6 +615,12 @@ def create_driver(headless=False, detach=False):
                 );
             """
         })
+
+    _stabilize_browser_window(driver, visible=not headless)
+    if headless:
+        print("🪟 浏览器窗口保持离屏运行")
+    else:
+        print("🪟 浏览器窗口已切换到可见交互模式")
 
     return driver
 
@@ -1263,7 +1375,7 @@ def click_resend_verification_email(driver):
 
 def fill_profile_info(driver):
     """
-    填写用户资料（随机生成的姓名和生日）
+    填写用户资料（随机生成的姓名和年龄相关字段）
     
     参数:
         driver: 浏览器驱动
@@ -1279,6 +1391,7 @@ def fill_profile_info(driver):
     birthday_year = user_info['year']
     birthday_month = user_info['month']
     birthday_day = user_info['day']
+    user_age = _calculate_age_from_birthdate(birthday_year, birthday_month, birthday_day)
     
     try:
         # 1. 输入姓名
@@ -1292,14 +1405,17 @@ def fill_profile_info(driver):
         _fill_profile_text_input(driver, name_input, user_name, "姓名")
         print(f"✅ 已输入姓名: {user_name}")
         time.sleep(1)
-        
-        # 2. 输入生日
-        print("🎂 正在输入生日...")
-        time.sleep(1)
 
-        _fill_birthdate_fields(driver, birthday_year, birthday_month, birthday_day)
-        
-        print(f"✅ 已输入生日: {birthday_year}/{birthday_month}/{birthday_day}")
+        # 2. 按实际字段结构填写年龄信息
+        profile_mode = _wait_profile_form_mode(driver, timeout_seconds=10)
+        if profile_mode == "age":
+            print("🎯 当前资料页为年龄输入模式，正在输入年龄...")
+            _fill_profile_age_field(driver, user_age)
+            print(f"✅ 已输入年龄: {user_age}")
+        else:
+            print("🎂 当前资料页为生日输入模式，正在输入生日...")
+            _fill_birthdate_fields(driver, birthday_year, birthday_month, birthday_day)
+            print(f"✅ 已输入生日: {birthday_year}/{birthday_month}/{birthday_day}")
         time.sleep(1)
         
         # 3. 点击最后的继续按钮
@@ -1314,7 +1430,7 @@ def fill_profile_info(driver):
             driver.execute_script("arguments[0].click();", continue_btn)
         print("✅ 已提交注册信息")
 
-        if not _wait_profile_submission_success(driver, before_submit_url):
+        if not _wait_profile_submission_success(driver, before_submit_url, profile_mode=profile_mode):
             raise RuntimeError("资料页提交后仍停留在当前表单，未检测到成功跳转")
         
         return True
@@ -1323,6 +1439,246 @@ def fill_profile_info(driver):
     except Exception as e:
         print(f"❌ 填写资料失败: {e}")
         return False
+
+
+def _calculate_age_from_birthdate(year: str, month: str, day: str) -> str:
+    """
+    根据生日计算当前年龄，保证年龄页与生日页使用同一份随机资料。
+
+    参数:
+        year: 年份
+        month: 月份
+        day: 日期
+    返回:
+        str: 当前年龄
+        AI by zb
+    """
+    try:
+        birth_year = int(str(year).strip())
+        birth_month = int(str(month).strip())
+        birth_day = int(str(day).strip())
+        today = date.today()
+        age_value = today.year - birth_year - ((today.month, today.day) < (birth_month, birth_day))
+        return str(max(age_value, 0))
+    except Exception:
+        try:
+            return str(max(date.today().year - int(str(year).strip()), 0))
+        except Exception:
+            return "18"
+
+
+def _detect_profile_form_mode(driver) -> str:
+    """
+    根据资料页实际可见字段识别当前表单模式。
+
+    参数:
+        driver: 浏览器驱动
+    返回:
+        str: `birthdate` / `age` / 空字符串
+        AI by zb
+    """
+    birthdate_input = _find_first_visible_element(
+        driver,
+        By.CSS_SELECTOR,
+        ['[data-type="year"]', '[data-type="month"]', '[data-type="day"]'],
+    )
+    if birthdate_input:
+        return "birthdate"
+
+    if _find_profile_age_input(driver):
+        return "age"
+
+    return ""
+
+
+def _wait_profile_form_mode(driver, timeout_seconds: int = 10) -> str:
+    """
+    等待资料页字段稳定出现，并识别应填写生日还是年龄。
+
+    参数:
+        driver: 浏览器驱动
+        timeout_seconds: 最大等待时长
+    返回:
+        str: `birthdate` 或 `age`
+        AI by zb
+    """
+    deadline = time.time() + max(int(timeout_seconds or 0), 1)
+    while time.time() < deadline:
+        profile_mode = _detect_profile_form_mode(driver)
+        if profile_mode:
+            return profile_mode
+
+        while check_and_handle_error(driver):
+            time.sleep(1)
+        time.sleep(0.4)
+
+    print("⚠️ 未能及时识别资料页字段模式，默认按生日模式处理")
+    return "birthdate"
+
+
+def _find_profile_age_input(driver):
+    """
+    查找资料页中的年龄输入框，仅按实际字段结构判断，不依赖页面标题文案。
+
+    参数:
+        driver: 浏览器驱动
+    返回:
+        WebElement | None: 年龄输入框
+        AI by zb
+    """
+    age_css_selectors = [
+        'input[name="age"]',
+        'input[id*="age"]',
+        'input[autocomplete="age"]',
+        'input[aria-label*="年龄"]',
+        'input[placeholder*="年龄"]',
+        'input[aria-label*="Age"]',
+        'input[placeholder*="Age"]',
+        'input[aria-label*="age"]',
+        'input[placeholder*="age"]',
+    ]
+    explicit_age_input = _find_first_visible_element(driver, By.CSS_SELECTOR, age_css_selectors)
+    if explicit_age_input:
+        return explicit_age_input
+
+    age_xpaths = [
+        '//*[self::label or self::div or self::span][normalize-space(.)="年龄"]/following::*[self::input or self::textarea][1]',
+        '//*[self::label or self::div or self::span][translate(normalize-space(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")="age"]/following::*[self::input or self::textarea][1]',
+    ]
+    explicit_age_input = _find_first_visible_element(driver, By.XPATH, age_xpaths)
+    if explicit_age_input:
+        return explicit_age_input
+
+    if _find_first_visible_element(
+        driver,
+        By.CSS_SELECTOR,
+        ['[data-type="year"]', '[data-type="month"]', '[data-type="day"]'],
+    ):
+        return None
+
+    name_input = _find_first_visible_element(
+        driver,
+        By.CSS_SELECTOR,
+        ['input[name="name"]', 'input[autocomplete="name"]'],
+    )
+    name_editable = _resolve_profile_editable_element(name_input) if name_input else None
+    has_age_related_text = _page_contains_any_text(
+        driver,
+        ["年龄", "how old are you", "confirm your age", "你的年龄是多少", "确认一下你的年龄"],
+    )
+    if not name_editable and not has_age_related_text:
+        return None
+
+    try:
+        candidates = driver.find_elements(
+            By.CSS_SELECTOR,
+            'input:not([type="hidden"]):not([type="submit"]):not([type="email"]):not([type="password"]), textarea',
+        )
+    except Exception:
+        return None
+
+    fallback_candidates = []
+    for candidate in candidates:
+        try:
+            editable = _resolve_profile_editable_element(candidate)
+            if not editable.is_displayed() or not editable.is_enabled():
+                continue
+
+            if name_editable and getattr(editable, "id", "") == getattr(name_editable, "id", ""):
+                continue
+
+            data_type = str(
+                editable.get_attribute("data-type")
+                or candidate.get_attribute("data-type")
+                or ""
+            ).strip().lower()
+            if data_type in {"year", "month", "day"}:
+                continue
+
+            field_hint = " ".join(
+                [
+                    str(editable.get_attribute("name") or ""),
+                    str(editable.get_attribute("autocomplete") or ""),
+                    str(editable.get_attribute("aria-label") or ""),
+                    str(editable.get_attribute("placeholder") or ""),
+                ]
+            ).strip().lower()
+            if any(keyword in field_hint for keyword in ("name", "full name", "姓名", "全名")):
+                continue
+
+            input_type = str(editable.get_attribute("type") or "").strip().lower()
+            input_mode = str(editable.get_attribute("inputmode") or "").strip().lower()
+            if input_type == "number" or input_mode == "numeric":
+                return editable
+
+            fallback_candidates.append(editable)
+        except Exception:
+            continue
+
+    if len(fallback_candidates) == 1:
+        return fallback_candidates[0]
+    return None
+
+
+def _wait_profile_age_input(driver, timeout: int = 30):
+    """
+    等待资料页年龄输入框可见并返回元素。
+
+    参数:
+        driver: 浏览器驱动
+        timeout: 超时时间
+    返回:
+        WebElement: 年龄输入框
+        AI by zb
+    """
+    deadline = time.time() + max(int(timeout or 0), 1)
+    while time.time() < deadline:
+        age_input = _find_profile_age_input(driver)
+        if age_input:
+            return age_input
+
+        while check_and_handle_error(driver):
+            time.sleep(1)
+        time.sleep(0.4)
+
+    raise RuntimeError("年龄输入框未出现")
+
+
+def _fill_profile_age_field(driver, age: str):
+    """
+    填写并校验年龄字段，避免年龄页仍按生日页流程处理。
+
+    参数:
+        driver: 浏览器驱动
+        age: 年龄值
+        AI by zb
+    """
+    expected_value = str(age).strip()
+    for attempt in range(1, 4):
+        age_input = _wait_profile_age_input(driver, timeout=30)
+        _fill_profile_text_input(
+            driver,
+            age_input,
+            expected_value,
+            "年龄",
+            focus_pause_seconds=0.5,
+            before_type_pause_seconds=0.1,
+            strategies=("keyboard", "native", "keyboard"),
+            typing_delay=0.12,
+            manual_clear_only=False,
+            blur_after_input=True,
+        )
+        time.sleep(0.3)
+
+        actual_value = _read_profile_element_value(
+            _resolve_profile_editable_element(_wait_profile_age_input(driver, timeout=5))
+        )
+        if actual_value == expected_value:
+            return
+
+        print(f"⚠️ 年龄校验失败，第 {attempt}/3 次实际值: {actual_value or '?'}")
+
+    raise RuntimeError(f"年龄输入后校验失败，当前值为: {actual_value or '?'}")
 
 
 def _wait_profile_input(driver, selector: str, field_name: str, timeout: int = 30):
@@ -1792,16 +2148,46 @@ def _profile_submission_has_error(driver) -> str:
         except Exception:
             continue
 
+    age_input = _find_profile_age_input(driver)
+    if age_input:
+        try:
+            if str(age_input.get_attribute("aria-invalid") or "").strip().lower() == "true":
+                return "字段校验失败: 年龄"
+        except Exception:
+            pass
+
     return ""
 
 
-def _wait_profile_submission_success(driver, before_submit_url: str) -> bool:
+def _profile_form_still_visible(driver, profile_mode: str) -> bool:
+    """
+    判断资料页表单是否仍停留在当前页面，兼容生日页与年龄页两种结构。
+
+    参数:
+        driver: 浏览器驱动
+        profile_mode: 资料页模式
+    返回:
+        bool: 是否仍能看到当前资料页表单
+        AI by zb
+    """
+    if str(profile_mode or "").strip().lower() == "age":
+        return _find_profile_age_input(driver) is not None
+
+    return _find_first_visible_element(
+        driver,
+        By.CSS_SELECTOR,
+        ['[data-type="year"]', '[data-type="month"]', '[data-type="day"]'],
+    ) is not None
+
+
+def _wait_profile_submission_success(driver, before_submit_url: str, profile_mode: str = "birthdate") -> bool:
     """
     等待资料页真正提交成功，避免仅点击按钮就误判为成功。
 
     参数:
         driver: 浏览器驱动
         before_submit_url: 提交前 URL
+        profile_mode: 资料页模式
     返回:
         bool: 是否确认成功
         AI by zb
@@ -1822,12 +2208,8 @@ def _wait_profile_submission_success(driver, before_submit_url: str) -> bool:
         except Exception:
             pass
 
-        # 若资料页字段已经消失，通常意味着提交通过并切到了下一步。
-        try:
-            if not driver.find_elements(By.CSS_SELECTOR, '[data-type="year"], [data-type="month"], [data-type="day"]'):
-                return True
-        except Exception:
-            pass
+        if not _profile_form_still_visible(driver, profile_mode):
+            return True
 
         time.sleep(0.5)
 

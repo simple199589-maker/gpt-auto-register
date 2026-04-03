@@ -41,6 +41,16 @@ ACCOUNT_RECORD_DEFAULTS = {
         "account_id": "",
     },
     "oauthOutputFile": "",
+    "deliveryInfo": {
+        "delivered": False,
+        "vendor": "",
+        "targetEmail": "",
+        "status": "",
+        "message": "",
+        "tempAccessUrl": "",
+        "mailId": "",
+        "deliveredAt": "",
+    },
     "registrationStatus": "pending",
     "overallStatus": "pending",
     "plusState": "idle",
@@ -53,10 +63,23 @@ ACCOUNT_RECORD_DEFAULTS = {
 ALLOWED_REGISTRATION_STATES = {"pending", "success", "failed"}
 ALLOWED_PLUS_STATES = {"idle", "pending", "success", "failed", "disabled"}
 ALLOWED_SUB2API_STATES = {"pending", "success", "failed", "disabled"}
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 _INIT_LOCK = threading.Lock()
 _INITIALIZED = False
+
+
+def _normalize_account_email(email: str) -> str:
+    """
+    规范化账号邮箱主键，统一按不区分大小写处理。
+
+    参数:
+        email: 原始邮箱
+    返回:
+        str: 标准化后的邮箱
+        AI by zb
+    """
+    return str(email or "").strip().lower()
 
 
 def _project_root() -> Path:
@@ -211,7 +234,7 @@ def _infer_plus_state(normalized: dict, prefer_explicit: bool = False) -> str:
         return "success"
     if "关闭" in plus_status or "跳过" in plus_status:
         return "disabled"
-    if any(keyword in plus_status for keyword in ("激活中", "处理中", "取消中")):
+    if any(keyword in plus_status for keyword in ("激活中", "处理中", "取消中", "已提交")):
         return "pending"
     if normalized.get("plusCalled"):
         return "failed"
@@ -320,6 +343,20 @@ def _normalize_account_record(record: dict) -> dict:
         "refresh_token": str((oauth_tokens or {}).get("refresh_token") or ""),
         "id_token": str((oauth_tokens or {}).get("id_token") or ""),
         "account_id": str((oauth_tokens or {}).get("account_id") or ""),
+    }
+
+    delivery_info = normalized.get("deliveryInfo")
+    if not isinstance(delivery_info, dict):
+        delivery_info = _safe_json_loads(delivery_info, {})
+    normalized["deliveryInfo"] = {
+        "delivered": bool((delivery_info or {}).get("delivered")),
+        "vendor": str((delivery_info or {}).get("vendor") or "").strip(),
+        "targetEmail": str((delivery_info or {}).get("targetEmail") or "").strip(),
+        "status": str((delivery_info or {}).get("status") or "").strip(),
+        "message": str((delivery_info or {}).get("message") or "").strip(),
+        "tempAccessUrl": str((delivery_info or {}).get("tempAccessUrl") or "").strip(),
+        "mailId": str((delivery_info or {}).get("mailId") or "").strip(),
+        "deliveredAt": str((delivery_info or {}).get("deliveredAt") or "").strip(),
     }
 
     status = normalized["status"]
@@ -474,6 +511,7 @@ def _record_to_row(record: dict) -> dict:
         "sub2api_auto_upload_enabled": 1 if normalized["sub2apiAutoUploadEnabled"] else 0,
         "oauth_tokens_json": json.dumps(normalized["oauthTokens"], ensure_ascii=False),
         "oauth_output_file": normalized["oauthOutputFile"],
+        "delivery_info_json": json.dumps(normalized["deliveryInfo"], ensure_ascii=False),
         "created_at": normalized["createdAt"],
         "updated_at": normalized["updatedAt"],
         "last_error": normalized["lastError"],
@@ -511,6 +549,7 @@ def _row_to_record(row: sqlite3.Row) -> dict:
         "sub2apiAutoUploadEnabled": bool(row["sub2api_auto_upload_enabled"]),
         "oauthTokens": _safe_json_loads(row["oauth_tokens_json"], {}),
         "oauthOutputFile": row["oauth_output_file"],
+        "deliveryInfo": _safe_json_loads(row["delivery_info_json"], {}),
         "registrationStatus": row["registration_status"],
         "overallStatus": row["overall_status"],
         "plusState": row["plus_status"],
@@ -561,6 +600,7 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
             sub2api_auto_upload_enabled INTEGER NOT NULL DEFAULT 0,
             oauth_tokens_json TEXT NOT NULL DEFAULT '{}',
             oauth_output_file TEXT NOT NULL DEFAULT '',
+            delivery_info_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL DEFAULT '',
             updated_at TEXT NOT NULL DEFAULT '',
             last_error TEXT NOT NULL DEFAULT ''
@@ -573,6 +613,7 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_accounts_sub2api_status ON accounts(sub2api_status);
         """
     )
+    _ensure_account_columns(connection)
     connection.execute(
         """
         INSERT INTO meta(key, value)
@@ -582,6 +623,28 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
         (SCHEMA_VERSION,),
     )
     connection.commit()
+
+
+def _ensure_account_columns(connection: sqlite3.Connection) -> None:
+    """
+    补齐历史数据库缺失的账号字段。
+
+    参数:
+        connection: 数据库连接
+        AI by zb
+    """
+    existing_columns = {
+        str(row["name"] or "").strip().lower()
+        for row in connection.execute("PRAGMA table_info(accounts)").fetchall()
+    }
+    required_columns = {
+        "delivery_info_json": "TEXT NOT NULL DEFAULT '{}'",
+    }
+
+    for column_name, definition in required_columns.items():
+        if column_name in existing_columns:
+            continue
+        connection.execute(f"ALTER TABLE accounts ADD COLUMN {column_name} {definition}")
 
 
 def _migrate_legacy_accounts(connection: sqlite3.Connection) -> None:
@@ -607,6 +670,9 @@ def _migrate_legacy_accounts(connection: sqlite3.Connection) -> None:
             if not record or not record.get("email"):
                 continue
             row = _record_to_row(record)
+            row["email"] = _normalize_account_email(row.get("email"))
+            if not row["email"]:
+                continue
             connection.execute(
                 """
                 INSERT INTO accounts (
@@ -616,7 +682,7 @@ def _migrate_legacy_accounts(connection: sqlite3.Connection) -> None:
                     plus_request_id, plus_called_at,
                     sub2api_uploaded, sub2api_status, sub2api_status_text, sub2api_message,
                     sub2api_uploaded_at, sub2api_auto_upload_enabled,
-                    oauth_tokens_json, oauth_output_file,
+                    oauth_tokens_json, oauth_output_file, delivery_info_json,
                     created_at, updated_at, last_error
                 )
                 VALUES (
@@ -626,7 +692,7 @@ def _migrate_legacy_accounts(connection: sqlite3.Connection) -> None:
                     :plus_request_id, :plus_called_at,
                     :sub2api_uploaded, :sub2api_status, :sub2api_status_text, :sub2api_message,
                     :sub2api_uploaded_at, :sub2api_auto_upload_enabled,
-                    :oauth_tokens_json, :oauth_output_file,
+                    :oauth_tokens_json, :oauth_output_file, :delivery_info_json,
                     :created_at, :updated_at, :last_error
                 )
                 ON CONFLICT(email) DO UPDATE SET
@@ -652,6 +718,7 @@ def _migrate_legacy_accounts(connection: sqlite3.Connection) -> None:
                     sub2api_auto_upload_enabled = excluded.sub2api_auto_upload_enabled,
                     oauth_tokens_json = excluded.oauth_tokens_json,
                     oauth_output_file = excluded.oauth_output_file,
+                    delivery_info_json = excluded.delivery_info_json,
                     created_at = excluded.created_at,
                     updated_at = excluded.updated_at,
                     last_error = excluded.last_error
@@ -703,6 +770,7 @@ def _refresh_derived_statuses(connection: sqlite3.Connection) -> None:
             "sub2apiAutoUploadEnabled": bool(row["sub2api_auto_upload_enabled"]),
             "oauthTokens": _safe_json_loads(row["oauth_tokens_json"], {}),
             "oauthOutputFile": row["oauth_output_file"],
+            "deliveryInfo": _safe_json_loads(row["delivery_info_json"], {}),
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
             "lastError": row["last_error"],
@@ -790,13 +858,18 @@ def get_account_record(email: str) -> Optional[dict]:
         AI by zb
     """
     ensure_account_store()
-    target = str(email or "").strip().lower()
+    target = _normalize_account_email(email)
     if not target:
         return None
 
     with _connect() as connection:
         row = connection.execute(
-            "SELECT * FROM accounts WHERE LOWER(email) = ? LIMIT 1",
+            """
+            SELECT * FROM accounts
+            WHERE LOWER(email) = ?
+            ORDER BY updated_at DESC, email DESC
+            LIMIT 1
+            """,
             (target,),
         ).fetchone()
     return _row_to_record(row) if row else None
@@ -814,14 +887,15 @@ def upsert_account_record(email: str, updates: dict) -> dict:
         AI by zb
     """
     ensure_account_store()
-    target = str(email or "").strip()
+    target = _normalize_account_email(email)
     if not target:
         raise ValueError("邮箱不能为空")
 
     current = get_account_record(target)
-    base_record = current or _normalize_account_record({"email": target})
+    canonical_email = str((current or {}).get("email") or "").strip() or target
+    base_record = current or _normalize_account_record({"email": canonical_email})
     merged = _merge_nested_dict(base_record, updates or {})
-    merged["email"] = target
+    merged["email"] = canonical_email
 
     current_timestamp = str((updates or {}).get("time") or _current_timestamp())
     merged["createdAt"] = str(base_record.get("createdAt") or base_record.get("time") or current_timestamp)
@@ -841,7 +915,7 @@ def upsert_account_record(email: str, updates: dict) -> dict:
                 plus_request_id, plus_called_at,
                 sub2api_uploaded, sub2api_status, sub2api_status_text, sub2api_message,
                 sub2api_uploaded_at, sub2api_auto_upload_enabled,
-                oauth_tokens_json, oauth_output_file,
+                oauth_tokens_json, oauth_output_file, delivery_info_json,
                 created_at, updated_at, last_error
             )
             VALUES (
@@ -851,7 +925,7 @@ def upsert_account_record(email: str, updates: dict) -> dict:
                 :plus_request_id, :plus_called_at,
                 :sub2api_uploaded, :sub2api_status, :sub2api_status_text, :sub2api_message,
                 :sub2api_uploaded_at, :sub2api_auto_upload_enabled,
-                :oauth_tokens_json, :oauth_output_file,
+                :oauth_tokens_json, :oauth_output_file, :delivery_info_json,
                 :created_at, :updated_at, :last_error
             )
             ON CONFLICT(email) DO UPDATE SET
@@ -877,6 +951,7 @@ def upsert_account_record(email: str, updates: dict) -> dict:
                 sub2api_auto_upload_enabled = excluded.sub2api_auto_upload_enabled,
                 oauth_tokens_json = excluded.oauth_tokens_json,
                 oauth_output_file = excluded.oauth_output_file,
+                delivery_info_json = excluded.delivery_info_json,
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at,
                 last_error = excluded.last_error
@@ -885,7 +960,7 @@ def upsert_account_record(email: str, updates: dict) -> dict:
         )
         connection.commit()
 
-    refreshed = get_account_record(target)
+    refreshed = get_account_record(canonical_email)
     if refreshed is None:
         raise RuntimeError("账号记录写入失败")
     return refreshed
@@ -902,7 +977,7 @@ def delete_account_record(email: str) -> bool:
         AI by zb
     """
     ensure_account_store()
-    target = str(email or "").strip().lower()
+    target = _normalize_account_email(email)
     if not target:
         return False
 
@@ -1033,6 +1108,8 @@ def sanitize_account_record_for_web(record: dict) -> dict:
         and normalized.get("oauthTokens", {}).get("refresh_token")
         and normalized.get("oauthTokens", {}).get("id_token")
     )
+    delivery_info = normalized.get("deliveryInfo") or {}
+    delivery_delivered = bool(delivery_info.get("delivered"))
 
     return {
         "email": normalized.get("email", ""),
@@ -1052,8 +1129,17 @@ def sanitize_account_record_for_web(record: dict) -> dict:
         "sub2apiStatus": normalized.get("sub2apiStatus", ""),
         "sub2apiMessage": normalized.get("sub2apiMessage", ""),
         "sub2apiAutoUploadEnabled": normalized.get("sub2apiAutoUploadEnabled", False),
+        "deliveryDelivered": delivery_delivered,
+        "deliveryVendor": str(delivery_info.get("vendor") or ""),
+        "deliveryTargetEmail": str(delivery_info.get("targetEmail") or ""),
+        "deliveryStatus": str(delivery_info.get("status") or ("已发货" if delivery_delivered else "未发货")),
+        "deliveryMessage": str(delivery_info.get("message") or ""),
+        "deliveryTempAccessUrl": str(delivery_info.get("tempAccessUrl") or ""),
+        "deliveryMailId": str(delivery_info.get("mailId") or ""),
+        "deliveryDeliveredAt": str(delivery_info.get("deliveredAt") or ""),
         "hasAccessToken": has_access_token,
         "hasOAuthTokens": has_oauth_tokens,
+        "canCopyAccessToken": has_access_token,
         "canRetryRegistration": bool(
             normalized.get("registrationStatus") != "success"
             and normalized.get("email")
@@ -1064,4 +1150,5 @@ def sanitize_account_record_for_web(record: dict) -> dict:
         "canEditStatus": bool(normalized.get("email")),
         "canDeleteAccount": bool(normalized.get("email")),
         "canUploadSub2api": bool(has_oauth_tokens or has_password),
+        "canDeliver": bool(normalized.get("email") and has_password),
     }

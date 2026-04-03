@@ -6,13 +6,14 @@
 
 import time
 import email
+import random
 from datetime import datetime, timezone
 from email import policy
 from typing import Any, Dict, Optional
 
 from app.config import (
     EMAIL_WORKER_URL,
-    EMAIL_DOMAIN,
+    EMAIL_DOMAIN_INDEX,
     EMAIL_WAIT_TIMEOUT,
     EMAIL_POLL_INTERVAL,
     HTTP_TIMEOUT,
@@ -36,7 +37,12 @@ def _build_admin_headers():
     }
 
 
-def _request_email_api(method: str, path: str, params: Optional[Dict[str, Any]] = None):
+def _request_email_api(
+    method: str,
+    path: str,
+    params: Optional[Dict[str, Any]] = None,
+    json_body: Optional[Dict[str, Any]] = None,
+):
     """
     统一发起邮箱服务请求。
     AI by zb
@@ -55,6 +61,7 @@ def _request_email_api(method: str, path: str, params: Optional[Dict[str, Any]] 
             url=f"{EMAIL_WORKER_URL.rstrip('/')}{path}",
             headers=_build_admin_headers(),
             params=params,
+            json=json_body,
             timeout=HTTP_TIMEOUT
         )
     except Exception as e:
@@ -62,39 +69,190 @@ def _request_email_api(method: str, path: str, params: Optional[Dict[str, Any]] 
         return None
 
 
-def _get_domain_index():
+def _extract_email_api_error(response, fallback: str) -> str:
     """
-    按配置域名匹配服务端 domainIndex。
+    提取邮箱服务错误信息。
     AI by zb
     """
-    if not EMAIL_DOMAIN:
-        return None
-
-    response = _request_email_api("GET", "/api/domains")
     if response is None:
-        return None
-
-    if response.status_code != 200:
-        print(f"⚠️ 获取域名列表失败: HTTP {response.status_code}")
-        return None
+        return fallback
 
     try:
-        domains = response.json()
-    except Exception as e:
-        print(f"⚠️ 解析域名列表失败: {e}")
+        payload = response.json()
+    except Exception:
+        payload = None
+
+    if isinstance(payload, dict):
+        message = str(payload.get("error") or payload.get("message") or "").strip()
+        if message:
+            return message
+
+    text = str(getattr(response, "text", "") or "").strip()
+    if text:
+        return text[:200]
+    return fallback
+
+
+def _absolute_email_service_url(url: str) -> str:
+    """
+    将邮箱服务返回的链接补全为绝对地址。
+    AI by zb
+    """
+    normalized_url = str(url or "").strip()
+    if not normalized_url:
+        return ""
+    if normalized_url.startswith(("http://", "https://")):
+        return normalized_url
+    return f"{EMAIL_WORKER_URL.rstrip('/')}/{normalized_url.lstrip('/')}"
+
+
+def send_single_email(
+    to_email: str,
+    subject: str,
+    html: str,
+    text: str,
+    from_email: str = "auth@joini.cloud",
+    from_name: str = "授权信息",
+    scheduled_at: str = "",
+) -> Dict[str, Any]:
+    """
+    发送单封邮件。
+
+    参数:
+        to_email: 收件邮箱
+        subject: 邮件主题
+        html: HTML 内容
+        text: 纯文本内容
+        from_email: 发件邮箱
+        from_name: 发件人名称
+        scheduled_at: 可选定时发送时间
+    返回:
+        Dict[str, Any]: 发送结果
+        AI by zb
+    """
+    payload = {
+        "from": str(from_email or "").strip() or "auth@joini.cloud",
+        "fromName": str(from_name or "").strip() or "授权信息",
+        "to": str(to_email or "").strip(),
+        "subject": str(subject or "").strip(),
+        "html": str(html or "").strip(),
+        "text": str(text or "").strip(),
+    }
+    if scheduled_at:
+        payload["scheduledAt"] = str(scheduled_at).strip()
+
+    response = _request_email_api("POST", "/api/send", json_body=payload)
+    if response is None:
+        return {
+            "success": False,
+            "message": "发送邮件失败：邮箱服务无响应",
+            "id": "",
+        }
+
+    if response.status_code not in {200, 201}:
+        return {
+            "success": False,
+            "message": _extract_email_api_error(response, f"发送邮件失败：HTTP {response.status_code}"),
+            "id": "",
+        }
+
+    try:
+        result = response.json()
+    except Exception as exc:
+        return {
+            "success": False,
+            "message": f"发送邮件失败：响应解析异常 {exc}",
+            "id": "",
+        }
+
+    if not isinstance(result, dict):
+        return {
+            "success": False,
+            "message": "发送邮件失败：响应结构异常",
+            "id": "",
+        }
+
+    succeeded = bool(result.get("success", True))
+    return {
+        "success": succeeded,
+        "message": str(result.get("message") or ("邮件发送成功" if succeeded else "邮件发送失败")).strip(),
+        "id": str(result.get("id") or "").strip(),
+        "data": result,
+    }
+
+
+def create_temp_access_url(address: str) -> Dict[str, Any]:
+    """
+    为指定邮箱生成临时访问链接。
+
+    参数:
+        address: 邮箱地址
+    返回:
+        Dict[str, Any]: 临时访问结果
+        AI by zb
+    """
+    response = _request_email_api(
+        "POST",
+        "/api/mailboxes/temp-access",
+        json_body={"address": str(address or "").strip()},
+    )
+    if response is None:
+        return {
+            "success": False,
+            "message": "生成临时访问链接失败：邮箱服务无响应",
+            "url": "",
+            "code": "",
+        }
+
+    if response.status_code not in {200, 201}:
+        return {
+            "success": False,
+            "message": _extract_email_api_error(response, f"生成临时访问链接失败：HTTP {response.status_code}"),
+            "url": "",
+            "code": "",
+        }
+
+    try:
+        result = response.json()
+    except Exception as exc:
+        return {
+            "success": False,
+            "message": f"生成临时访问链接失败：响应解析异常 {exc}",
+            "url": "",
+            "code": "",
+        }
+
+    if not isinstance(result, dict):
+        return {
+            "success": False,
+            "message": "生成临时访问链接失败：响应结构异常",
+            "url": "",
+            "code": "",
+        }
+
+    url = _absolute_email_service_url(str(result.get("url") or "").strip())
+    succeeded = bool(result.get("success")) and bool(url)
+    return {
+        "success": succeeded,
+        "message": str(result.get("message") or ("临时访问链接已生成" if succeeded else "临时访问链接生成失败")).strip(),
+        "url": url,
+        "code": str(result.get("code") or "").strip(),
+        "address": str(result.get("address") or address or "").strip(),
+        "data": result,
+    }
+
+
+def _get_domain_index():
+    """
+    从配置的 `email.domainIndex` 中随机选择一个 domainIndex。
+    AI by zb
+    """
+    configured_indexes = [int(item) for item in list(EMAIL_DOMAIN_INDEX or []) if str(item).strip().lstrip("-").isdigit()]
+    if not configured_indexes:
         return None
-
-    if not isinstance(domains, list):
-        print(f"⚠️ 域名列表格式异常: {domains}")
-        return None
-
-    target_domain = EMAIL_DOMAIN.lower()
-    for index, domain in enumerate(domains):
-        if str(domain).lower() == target_domain:
-            return index
-
-    print(f"⚠️ 配置域名 {EMAIL_DOMAIN} 不在服务端域名列表中，将使用默认域名")
-    return None
+    selected_index = random.choice(configured_indexes)
+    print(f"📨 本次邮箱创建使用 domainIndex={selected_index}")
+    return selected_index
 
 
 def _resolve_mailbox_context(jwt_token: str):

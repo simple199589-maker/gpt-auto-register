@@ -1,3 +1,4 @@
+import argparse
 import logging
 import threading
 import time
@@ -17,7 +18,7 @@ import app.plus_activation_api as plus_activation_api
 import app.plus_binding as plus_binding
 import app.account_actions as account_actions
 from app.account_store import count_account_records, query_account_records
-from app.config import cfg, update_automation_settings
+from app.config import cfg, select_activation_api_base_url, update_automation_settings
 from app.utils import get_account_record, parse_account_record, sanitize_account_record_for_web
 
 STATIC_DIR = Path(__file__).resolve().with_name("static")
@@ -42,6 +43,8 @@ class AppState:
         self.current_action = "等待启动"
         self.logs = []
         self.lock = threading.Lock()
+        self.activation_lock = threading.Lock()
+        self.activation_owner = ""
         
         # MJPEG 流缓冲区
         self.last_frame = None
@@ -58,6 +61,50 @@ class AppState:
     def get_logs(self, start_index=0):
         with self.lock:
             return list(self.logs[start_index:])
+
+    def try_acquire_activation(self, owner: str) -> tuple[bool, str]:
+        """
+        尝试占用整站激活线路。
+
+        参数:
+            owner: 当前激活动作标识
+        返回:
+            tuple[bool, str]: (是否成功，占用中的动作标识)
+            AI by zb
+        """
+        acquired = self.activation_lock.acquire(blocking=False)
+        with self.lock:
+            if acquired:
+                self.activation_owner = owner
+                return True, self.activation_owner
+            return False, self.activation_owner
+
+    def release_activation(self) -> None:
+        """
+        释放整站激活线路占用状态。
+
+        返回:
+            None
+            AI by zb
+        """
+        with self.lock:
+            self.activation_owner = ""
+        if self.activation_lock.locked():
+            try:
+                self.activation_lock.release()
+            except RuntimeError:
+                pass
+
+    def get_activation_owner(self) -> str:
+        """
+        获取当前占用激活线路的动作标识。
+
+        返回:
+            str: 当前激活动作标识
+            AI by zb
+        """
+        with self.lock:
+            return str(self.activation_owner or "")
             
     def update_frame(self, frame_bytes):
         with self.frame_lock:
@@ -277,6 +324,40 @@ def build_automation_settings_payload() -> dict:
     }
 
 
+def is_activation_request_accepted(result) -> bool:
+    """
+    判断激活动作是否已经成功提交到远端服务。
+
+    参数:
+        result: 激活结果对象
+    返回:
+        bool: 是否已提交成功
+        AI by zb
+    """
+    return bool(getattr(result, "success", False) or getattr(result, "accepted", False))
+
+
+def build_activation_response_status(result) -> str:
+    """
+    将激活结果映射为接口层统一状态，便于调用方区分处理中和终态。
+
+    参数:
+        result: 激活结果对象
+    返回:
+        str: `success/processing/cancelled/failed`
+        AI by zb
+    """
+    if getattr(result, "success", False):
+        return "success"
+
+    stage = str(getattr(result, "stage", "") or "").strip().lower()
+    if stage == "cancelled":
+        return "cancelled"
+    if is_activation_request_accepted(result):
+        return "processing"
+    return "failed"
+
+
 def _run_manual_account_action(action_name, handler):
     """
     统一执行账号手动动作，并更新全局状态提示。
@@ -297,6 +378,41 @@ def _run_manual_account_action(action_name, handler):
         return email, result
     finally:
         state.current_action = previous_action if previous_action else "等待启动"
+
+
+def _run_manual_activation_action(action_name, handler):
+    """
+    统一执行手动激活动作，并串行化整站激活线路。
+
+    参数:
+        action_name: 当前动作名称
+        handler: 业务处理函数
+    返回:
+        tuple[str | None, object]: (邮箱, 处理结果或错误响应)
+        AI by zb
+    """
+    if state.is_running:
+        return None, (jsonify({"error": "批量任务运行中，请稍后再试"}), 400)
+
+    data = request.json or {}
+    email = str(data.get("email") or "").strip()
+    if not email:
+        return None, (jsonify({"error": "缺少邮箱参数"}), 400)
+
+    owner = f"{action_name}: {email}"
+    acquired, busy_owner = state.try_acquire_activation(owner)
+    if not acquired:
+        busy_text = busy_owner or "当前已有其它 Plus / Team 激活任务在执行"
+        return None, (jsonify({"error": f"激活线路忙碌中，请稍后再试：{busy_text}"}), 409)
+
+    previous_action = state.current_action
+    state.current_action = owner
+    try:
+        result = handler(email)
+        return email, result
+    finally:
+        state.current_action = previous_action if previous_action else "等待启动"
+        state.release_activation()
 
 # ==========================================
 # 🌐 API 接口
@@ -406,9 +522,125 @@ def get_accounts():
     )
 
 
+@app.route('/api/accounts/create', methods=['POST'])
+def create_account_manually():
+    """
+    手动新增账号记录接口。
+
+    返回:
+        Response: JSON 响应
+        AI by zb
+    """
+    if state.is_running:
+        return jsonify({"error": "批量任务运行中，请稍后再试"}), 400
+
+    data = request.json or {}
+    email = str(data.get("email") or "").strip()
+    password = str(data.get("password") or "").strip()
+    access_token = str(data.get("accessToken") or "").strip()
+
+    previous_action = state.current_action
+    state.current_action = f"手动新增账号: {email or '未命名'}"
+    try:
+        account = account_actions.run_manual_account_create(
+            email=email,
+            password=password,
+            access_token=access_token,
+        )
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+    finally:
+        state.current_action = previous_action if previous_action else "等待启动"
+
+    return jsonify(
+        {
+            "success": True,
+            "message": "账号已添加",
+            "account": sanitize_account_record_for_web(account) if account else None,
+        }
+    )
+
+
+@app.route('/api/accounts/deliver', methods=['POST'])
+def deliver_account():
+    """
+    向当前发货邮箱发送账号密码，并生成临时访问链接。
+
+    返回:
+        Response: JSON 响应
+        AI by zb
+    """
+    if state.is_running:
+        return jsonify({"error": "批量任务运行中，请稍后再试"}), 400
+
+    data = request.json or {}
+    email = str(data.get("email") or "").strip()
+    vendor = str(data.get("vendor") or "").strip() or "咸鱼"
+    if not email:
+        return jsonify({"error": "缺少邮箱参数"}), 400
+
+    previous_action = state.current_action
+    state.current_action = f"发货账号: {email}"
+    try:
+        result = account_actions.run_delivery_for_account(
+            email=email,
+            vendor=vendor,
+        )
+    finally:
+        state.current_action = previous_action if previous_action else "等待启动"
+
+    account = get_account_record(email)
+    return jsonify(
+        {
+            "success": bool(result.success),
+            "delivered": bool(result.delivered),
+            "message": result.message,
+            "stage": result.stage,
+            "vendor": result.vendor,
+            "deliveryEmail": result.delivery_email,
+            "tempAccessUrl": result.temp_access_url,
+            "tempAccessReady": bool(result.temp_access_ready),
+            "mailId": result.mail_id,
+            "account": sanitize_account_record_for_web(account) if account else None,
+        }
+    )
+
+
+@app.route('/api/accounts/access-token', methods=['POST'])
+def get_account_access_token():
+    """
+    按邮箱读取已保存的 accessToken。
+
+    返回:
+        Response: JSON 响应
+        AI by zb
+    """
+    data = request.json or {}
+    email = str(data.get("email") or "").strip()
+    if not email:
+        return jsonify({"error": "缺少邮箱参数"}), 400
+
+    account = get_account_record(email)
+    if not account:
+        return jsonify({"error": "账号不存在"}), 404
+
+    access_token = str(account.get("accessToken") or "").strip()
+    if not access_token:
+        return jsonify({"error": "当前账号未保存 accessToken"}), 400
+
+    return jsonify(
+        {
+            "success": True,
+            "message": "accessToken 获取成功",
+            "email": email,
+            "accessToken": access_token,
+        }
+    )
+
+
 @app.route('/api/accounts/retry-plus', methods=['POST'])
 def retry_account_plus():
-    email, maybe_error = _run_manual_account_action(
+    email, maybe_error = _run_manual_activation_action(
         "手动重试Plus",
         account_actions.run_plus_retry_for_account,
     )
@@ -416,6 +648,8 @@ def retry_account_plus():
         return maybe_error
 
     result = maybe_error
+    accepted = is_activation_request_accepted(result)
+    response_status = build_activation_response_status(result)
     cancelled = str(getattr(result, "stage", "") or "").strip().lower() == "cancelled"
     upload_result = None
     latest_account = get_account_record(email)
@@ -430,11 +664,16 @@ def retry_account_plus():
     account = get_account_record(email)
     return jsonify(
         {
-            "success": bool(result.success),
+            "success": accepted,
+            "accepted": accepted,
+            "status": response_status,
             "cancelled": cancelled,
-            "message": result.message or ("Plus 调用成功" if result.success else ("Plus 激活已取消" if cancelled else "Plus 调用失败")),
+            "requestId": result.request_id,
+            "message": ("Plus 激活成功" if result.success else ("Plus 激活已提交" if accepted else ("Plus 激活已取消" if cancelled else (result.message or "Plus 调用失败")))),
             "plus": {
-                "success": result.success,
+                "success": accepted,
+                "accepted": accepted,
+                "finalSuccess": result.success,
                 "stage": result.stage,
                 "status": result.status,
                 "message": result.message,
@@ -452,7 +691,7 @@ def retry_account_plus():
 
 @app.route('/api/accounts/retry-team', methods=['POST'])
 def retry_account_team():
-    email, maybe_error = _run_manual_account_action(
+    email, maybe_error = _run_manual_activation_action(
         "手动激活Team",
         account_actions.run_team_retry_for_account,
     )
@@ -460,20 +699,55 @@ def retry_account_team():
         return maybe_error
 
     result = maybe_error
+    accepted = is_activation_request_accepted(result)
+    response_status = build_activation_response_status(result)
     cancelled = str(getattr(result, "stage", "") or "").strip().lower() == "cancelled"
     account = get_account_record(email)
     return jsonify(
         {
-            "success": bool(result.success),
+            "success": accepted,
+            "accepted": accepted,
+            "status": response_status,
             "cancelled": cancelled,
-            "message": result.message or ("Team 激活成功" if result.success else ("Team 激活已取消" if cancelled else "Team 激活失败")),
+            "requestId": result.request_id,
+            "message": ("Team 激活成功" if result.success else ("Team 激活已提交" if accepted else ("Team 激活已取消" if cancelled else (result.message or "Team 激活失败")))),
             "team": {
-                "success": result.success,
+                "success": accepted,
+                "accepted": accepted,
+                "finalSuccess": result.success,
                 "stage": result.stage,
                 "status": result.status,
                 "message": result.message,
                 "requestId": result.request_id,
             },
+            "account": sanitize_account_record_for_web(account) if account else None,
+        }
+    )
+
+
+@app.route('/api/accounts/refresh-activation', methods=['POST'])
+def refresh_account_activation():
+    """
+    按账号 requestId 刷新当前激活状态。
+
+    返回:
+        Response: JSON 响应
+        AI by zb
+    """
+    data = request.json or {}
+    email = str(data.get("email") or "").strip()
+    if not email:
+        return jsonify({"error": "缺少邮箱参数"}), 400
+
+    try:
+        account = account_actions.refresh_activation_status_for_account(email)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify(
+        {
+            "success": True,
+            "message": "激活状态已刷新",
             "account": sanitize_account_record_for_web(account) if account else None,
         }
     )
@@ -619,9 +893,80 @@ def upload_account_sub2api():
         }
     )
 
-if __name__ == '__main__':
+
+def parse_server_startup_options(
+    argv: list[str] | None = None,
+    default_port: int = 5000,
+) -> argparse.Namespace:
+    """
+    解析 Web 服务启动参数，支持端口和 activation_api 索引。
+
+    参数:
+        argv: 命令行参数列表
+        default_port: 默认监听端口
+    返回:
+        argparse.Namespace: 解析后的启动参数
+        AI by zb
+    """
+    parser = argparse.ArgumentParser(description="启动 Web 控制台")
+    parser.add_argument("port", nargs="?", type=int, help="监听端口")
+    parser.add_argument("-p", "--port", dest="port_option", type=int, help="监听端口，优先级高于位置参数")
+    parser.add_argument("--api", dest="activation_api_index", type=int, help="选择 activation_api.base_url 的索引，从 0 开始")
+    args = parser.parse_args(argv)
+
+    port = args.port_option if args.port_option is not None else args.port
+    if port is None:
+        port = default_port
+    if not 1 <= port <= 65535:
+        parser.error("端口号必须在 1 到 65535 之间")
+
+    args.port = port
+    return args
+
+
+def parse_server_port(argv: list[str] | None = None, default_port: int = 5000) -> int:
+    """
+    解析 Web 服务启动端口，支持位置参数和 `--port` 选项。
+
+    参数:
+        argv: 命令行参数列表
+        default_port: 默认监听端口
+    返回:
+        int: 最终监听端口
+        AI by zb
+    """
+    return int(parse_server_startup_options(argv=argv, default_port=default_port).port)
+
+
+def start_web_server(port: int = 5000, activation_api_index: int | None = None) -> None:
+    """
+    使用 Waitress 启动 Web 控制台服务。
+
+    参数:
+        port: Web 服务监听端口
+    返回:
+        None
+        AI by zb
+    """
     from waitress import serve
-    print("🌐 Web Server started at http://localhost:5000")
+
+    selected_base_url, selected_index = select_activation_api_base_url(activation_api_index)
+    if activation_api_index is None:
+        print(f"🔌 activation_api 默认使用索引 {selected_index}: {selected_base_url}")
+    elif activation_api_index == selected_index:
+        print(f"🔌 activation_api 已切换到索引 {selected_index}: {selected_base_url}")
+    else:
+        print(f"⚠️ activation_api 索引 {activation_api_index} 不存在，已回退到索引 {selected_index}: {selected_base_url}")
+
+    print(f"🌐 Web Server started at http://localhost:{port}")
     # 使用生产级服务器 Waitress
     # threads=6 支持并发：前端页面 + API轮询 + MJPEG流 + 后台任务
-    serve(app, host='0.0.0.0', port=5000, threads=6)
+    serve(app, host='0.0.0.0', port=port, threads=6)
+
+
+if __name__ == '__main__':
+    startup_options = parse_server_startup_options(default_port=5000)
+    start_web_server(
+        port=int(startup_options.port),
+        activation_api_index=startup_options.activation_api_index,
+    )

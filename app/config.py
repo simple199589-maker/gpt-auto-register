@@ -45,6 +45,7 @@ class EmailConfig:
     """邮箱服务配置"""
     worker_url: str = ""
     domain: str = ""
+    domain_index: list[int] = field(default_factory=list)
     prefix_length: int = 10
     wait_timeout: int = 120
     poll_interval: int = 3
@@ -129,6 +130,59 @@ def _parse_group_ids(value: Any, default: list[int]) -> list[int]:
     return fallback
 
 
+def _parse_non_negative_int_list(value: Any, default: list[int]) -> list[int]:
+    """
+    将配置值规范化为非负整数列表，兼容单值、数组和逗号分隔字符串。
+
+    参数:
+        value: 原始配置值
+        default: 默认整数列表
+    返回:
+        list[int]: 规范化后的非负整数列表
+        AI by zb
+    """
+    fallback = [int(item) for item in list(default or []) if str(item).strip().isdigit()]
+
+    if isinstance(value, list):
+        values = [int(item) for item in value if str(item).strip().isdigit()]
+        return values or fallback
+    if isinstance(value, str):
+        parts = [part.strip() for part in value.replace("，", ",").split(",")]
+        values = [int(part) for part in parts if part.isdigit()]
+        return values or fallback
+    if str(value).strip().isdigit():
+        return [int(value)]
+    return fallback
+
+
+def _parse_url_list(value: Any, default: list[str]) -> list[str]:
+    """
+    将配置值规范化为 URL 列表，兼容字符串和数组写法。
+
+    参数:
+        value: 原始配置值
+        default: 默认 URL 列表
+    返回:
+        list[str]: 规范化后的 URL 列表
+        AI by zb
+    """
+    fallback = [
+        str(item or "").strip().rstrip("/")
+        for item in (default or [])
+        if str(item or "").strip()
+    ]
+    if not fallback:
+        fallback = ["https://bot.joini.cloud"]
+
+    raw_items = value if isinstance(value, list) else [value]
+    urls = [
+        str(item or "").strip().rstrip("/")
+        for item in raw_items
+        if str(item or "").strip()
+    ]
+    return urls or fallback
+
+
 @dataclass
 class PasswordConfig:
     """密码配置"""
@@ -180,6 +234,8 @@ class PaymentConfig:
 class ActivationApiConfig:
     """Plus 激活接口配置"""
     base_url: str = "https://bot.joini.cloud"
+    base_urls: list[str] = field(default_factory=lambda: ["https://bot.joini.cloud"])
+    selected_index: int = 0
     api_key: str = ""
     bearer: str = ""
     poll_interval: int = 3
@@ -462,6 +518,10 @@ class ConfigLoader:
             self.config.email = EmailConfig(
                 worker_url=email.get('worker_url', self.config.email.worker_url),
                 domain=email.get('domain', self.config.email.domain),
+                domain_index=_parse_non_negative_int_list(
+                    email.get('domainIndex', self.config.email.domain_index),
+                    list(self.config.email.domain_index or []),
+                ),
                 prefix_length=email.get('prefix_length', self.config.email.prefix_length),
                 wait_timeout=email.get('wait_timeout', self.config.email.wait_timeout),
                 poll_interval=email.get('poll_interval', self.config.email.poll_interval),
@@ -553,10 +613,17 @@ class ConfigLoader:
         # Plus 激活接口配置
         if 'activation_api' in self.raw_config:
             activation_api = self.raw_config['activation_api']
+            base_urls = _parse_url_list(
+                activation_api.get(
+                    'base_url',
+                    list(self.config.activation_api.base_urls or [self.config.activation_api.base_url]),
+                ),
+                list(self.config.activation_api.base_urls or [self.config.activation_api.base_url]),
+            )
             self.config.activation_api = ActivationApiConfig(
-                base_url=str(
-                    activation_api.get('base_url', self.config.activation_api.base_url)
-                ).strip().rstrip('/'),
+                base_url=base_urls[0],
+                base_urls=base_urls,
+                selected_index=0,
                 api_key=str(
                     activation_api.get('api_key', self.config.activation_api.api_key)
                 ).strip(),
@@ -717,6 +784,7 @@ MAX_AGE = cfg.registration.max_age
 # 邮箱配置
 EMAIL_WORKER_URL = cfg.email.worker_url
 EMAIL_DOMAIN = cfg.email.domain
+EMAIL_DOMAIN_INDEX = list(cfg.email.domain_index or [])
 EMAIL_PREFIX_LENGTH = cfg.email.prefix_length
 EMAIL_WAIT_TIMEOUT = cfg.email.wait_timeout
 EMAIL_POLL_INTERVAL = cfg.email.poll_interval
@@ -798,6 +866,32 @@ def update_automation_settings(
     return cfg
 
 
+def select_activation_api_base_url(preferred_index: Optional[int] = None) -> tuple[str, int]:
+    """
+    根据配置和可选索引选择当前生效的 activation_api.base_url。
+
+    参数:
+        preferred_index: 期望使用的 URL 索引，从 0 开始
+    返回:
+        tuple[str, int]: (最终生效的 URL, 实际使用的索引)
+        AI by zb
+    """
+    global cfg
+    base_urls = _parse_url_list(
+        cfg.activation_api.base_urls or cfg.activation_api.base_url,
+        [cfg.activation_api.base_url],
+    )
+
+    selected_index = 0
+    if isinstance(preferred_index, int) and 0 <= preferred_index < len(base_urls):
+        selected_index = preferred_index
+
+    cfg.activation_api.base_urls = base_urls
+    cfg.activation_api.selected_index = selected_index
+    cfg.activation_api.base_url = base_urls[selected_index]
+    return cfg.activation_api.base_url, selected_index
+
+
 def get_config() -> AppConfig:
     """获取当前配置对象"""
     return cfg
@@ -809,7 +903,7 @@ def print_config_summary() -> None:
     print("📋 当前配置摘要")
     print("=" * 50)
     print(f"  注册账号数量: {cfg.registration.total_accounts}")
-    print(f"  邮箱域名: {cfg.email.domain}")
+    print(f"  邮箱域名索引: {list(cfg.email.domain_index or [])}")
     print(f"  Worker URL: {cfg.email.worker_url[:30]}...")
     print(f"  账号保存文件: {cfg.files.accounts_file}")
     print(f"  账号数据库: {cfg.files.accounts_db_file}")

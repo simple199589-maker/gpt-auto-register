@@ -315,11 +315,99 @@
                             </div>
 
                             <div class="accounts-toolbar-side">
+                                <a-button
+                                    type="primary"
+                                    class="toolbar-primary-button"
+                                    :disabled="isRunning || manualAccountSubmitting"
+                                    @click="toggleManualAccountPanel"
+                                >
+                                    <template #icon>
+                                        <plus-outlined></plus-outlined>
+                                    </template>
+                                    {{ showManualAccountPanel ? '收起新增' : '手动新增账号' }}
+                                </a-button>
+
                                 <a-button :loading="accountsLoading" @click="loadAccounts">
                                     <template #icon>
                                         <reload-outlined></reload-outlined>
                                     </template>
                                     刷新列表
+                                </a-button>
+                            </div>
+                        </div>
+
+                        <div class="delivery-toolbar">
+                            <div class="delivery-toolbar-meta">
+                                <div class="delivery-toolbar-title">发货设置</div>
+                                <div class="delivery-toolbar-desc">点击某条账号的“发货”时，会把该条账号的邮箱和密码发送到它自己的邮箱内，并在成功后自动打开该邮箱的临时访问链接。</div>
+                            </div>
+
+                            <div class="delivery-toolbar-fields">
+                                <div class="delivery-toolbar-field">
+                                    <div class="field-label">厂家</div>
+                                    <a-input
+                                        v-model:value="deliverySettings.vendor"
+                                        :disabled="isRunning"
+                                        placeholder="默认咸鱼"
+                                    ></a-input>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div v-if="showManualAccountPanel" class="manual-account-panel">
+                            <div class="manual-account-header">
+                                <div>
+                                    <div class="manual-account-title">手动新增账号</div>
+                                    <div class="manual-account-desc">支持手工录入邮箱、密码与 accessToken，密码和 accessToken 至少填写一项。</div>
+                                </div>
+                            </div>
+
+                            <div class="manual-account-form">
+                                <div class="manual-account-field">
+                                    <div class="field-label">账号邮箱</div>
+                                    <a-input
+                                        v-model:value="manualAccountForm.email"
+                                        allow-clear
+                                        :disabled="isRunning || manualAccountSubmitting"
+                                        placeholder="例如 demo@example.com"
+                                        @pressEnter="submitManualAccount"
+                                    ></a-input>
+                                </div>
+
+                                <div class="manual-account-field">
+                                    <div class="field-label">账号密码</div>
+                                    <a-input
+                                        v-model:value="manualAccountForm.password"
+                                        allow-clear
+                                        :disabled="isRunning || manualAccountSubmitting"
+                                        type="password"
+                                        placeholder="可选，建议填写"
+                                        @pressEnter="submitManualAccount"
+                                    ></a-input>
+                                </div>
+
+                                <div class="manual-account-field manual-account-field-wide">
+                                    <div class="field-label">accessToken</div>
+                                    <a-input
+                                        v-model:value="manualAccountForm.accessToken"
+                                        allow-clear
+                                        :disabled="isRunning || manualAccountSubmitting"
+                                        placeholder="可选，支持直接录入已有 accessToken"
+                                        @pressEnter="submitManualAccount"
+                                    ></a-input>
+                                </div>
+                            </div>
+
+                            <div class="manual-account-actions">
+                                <a-button :disabled="isRunning || manualAccountSubmitting" @click="closeManualAccountPanel">取消</a-button>
+                                <a-button
+                                    type="primary"
+                                    class="toolbar-primary-button"
+                                    :disabled="isRunning"
+                                    :loading="manualAccountSubmitting"
+                                    @click="submitManualAccount"
+                                >
+                                    保存账号
                                 </a-button>
                             </div>
                         </div>
@@ -489,6 +577,20 @@
                                                     @click="handleAccountActionMenu('retryRegistration', record)"
                                                 >
                                                     继续注册
+                                                </button>
+                                                <button
+                                                    class="table-action-item"
+                                                    :disabled="!record.canDeliver"
+                                                    @click="handleAccountActionMenu('deliver', record)"
+                                                >
+                                                    {{ record.deliveryDelivered ? '重新发货' : '发货' }}
+                                                </button>
+                                                <button
+                                                    class="table-action-item"
+                                                    :disabled="!record.canCopyAccessToken"
+                                                    @click="handleAccountActionMenu('copyAccessToken', record)"
+                                                >
+                                                    复制 Token
                                                 </button>
                                                 <button
                                                     class="table-action-item"

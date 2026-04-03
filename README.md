@@ -68,6 +68,9 @@ Web 控制台：
 
 ```bash
 uv run server.py
+uv run server.py 5006
+uv run server.py --port 5006
+uv run server.py --port 5006 --api 1
 ```
 
 命令行批量注册：
@@ -115,7 +118,7 @@ registration:
 
 email:
   worker_url: "https://your-worker.workers.dev"
-  domain: "your-domain.com"
+  domainIndex: [0, 1, 2]
   prefix_length: 10
   wait_timeout: 120
   poll_interval: 3
@@ -157,6 +160,13 @@ plus:
   mode: "activation_api"
   auto_activate: true
 
+activation_api:
+  base_url: ["https://bot.joini.cloud", "http://127.0.0.1:8000"]
+  api_key: "your_activation_api_key"
+  bearer: ""
+  poll_interval: 3
+  poll_timeout: 300
+
 sub2api:
   base_url: "https://your-sub2api-domain"
   bearer: ""
@@ -171,12 +181,12 @@ sub2api:
 | 配置项 | 路径 | 说明 |
 |--------|------|------|
 | Worker 地址 | `email.worker_url` | 你的 cloudflare_temp_email Worker 地址 |
-| 邮箱域名 | `email.domain` | 收信域名 |
 | 管理员密码 | `email.admin_password` | 邮箱服务管理员密码 |
 
 Sub2Api 上传说明：
 
 - `plus.auto_activate=false` 时，注册成功后会跳过 Plus 激活并直接进入 Sub2Api 流程。
+- `activation_api.base_url` 支持字符串或数组；当配置为数组时，启动 `server.py` 可用 `--api <索引>` 选择地址，索引从 `0` 开始，越界会回退到第 `0` 个。
 - 手动点击“重试 Plus”或“激活 Team”时，会按 `retry.manual_activation_attempts` 配置的轮数执行，成功即停止。
 - Codex 上传使用 Sub2Api 后台 `email/password` 登录获取 bearer，不走 `api_key`。
 - `sub2api.base_url` 建议直接填写 `https://` 地址，避免网关 301 把 POST 改写成 GET。

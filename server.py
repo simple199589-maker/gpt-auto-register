@@ -16,7 +16,8 @@ from app.web_server import *  # noqa: F401,F403
 
 
 if __name__ == "__main__":
-    from waitress import serve
-
-    print("🌐 Web Server started at http://localhost:5000")
-    serve(app, host="0.0.0.0", port=5000, threads=6)
+    startup_options = parse_server_startup_options(default_port=5005)
+    start_web_server(
+        port=int(startup_options.port),
+        activation_api_index=startup_options.activation_api_index,
+    )
