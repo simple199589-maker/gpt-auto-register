@@ -274,7 +274,7 @@ def _get_manual_activation_attempts() -> int:
         AI by zb
     """
     configured_attempts = max(int(getattr(cfg.retry, "manual_activation_attempts", 3) or 1), 1)
-    return min(configured_attempts, 10)
+    return configured_attempts
 
 
 def _mark_activation_pending(email: str, status_text: str) -> None:

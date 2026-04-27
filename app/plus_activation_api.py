@@ -26,6 +26,9 @@ ACTIVATION_SUBMIT_TIMEOUT_SECONDS = 120
 ACTIVATION_TIMEOUT_STATUS_POLL_SECONDS = 120
 ACCESS_TOKEN_FETCH_MAX_ATTEMPTS = 5
 ACCESS_TOKEN_FETCH_RETRY_INTERVAL_SECONDS = 2
+ACTIVATION_SUCCESS_MESSAGE_KEYWORDS = ("升级成功", "激活成功", "已升级", "升级完成")
+ACTIVATION_FAILURE_MESSAGE_KEYWORDS = ("token 无效或已过期", "token 无效", "额度已退回", "重新获取后再试", "激活失败")
+ACTIVATION_CANCEL_MESSAGE_KEYWORDS = ("已取消", "cancelled", "canceled")
 _PLUS_RESULT_CACHE: Dict[str, Dict[str, Any]] = {}
 _PLUS_RESULT_CACHE_LOCK = threading.Lock()
 
@@ -193,6 +196,73 @@ def _coerce_activation_success_flag(value: Any) -> Optional[bool]:
     return None
 
 
+def _get_activation_scalar_value(data: Optional[Dict[str, Any]], *keys: str) -> Any:
+    """
+    从激活接口返回及其嵌套 data 中读取首个可用标量字段。
+
+    参数:
+        data: 激活接口返回数据
+        keys: 依次尝试读取的字段名
+    返回:
+        Any: 命中的字段值；未命中时返回 None
+        AI by zb
+    """
+    if not isinstance(data, dict):
+        return None
+
+    lookup_scopes = [data]
+    nested_data = data.get("data")
+    if isinstance(nested_data, dict):
+        lookup_scopes.append(nested_data)
+
+    for scope in lookup_scopes:
+        for key in keys:
+            value = scope.get(key)
+            if value is None:
+                continue
+            if isinstance(value, str):
+                if value.strip():
+                    return value
+                continue
+            return value
+    return None
+
+
+def _contains_any_activation_keyword(text: str, keywords: tuple[str, ...]) -> bool:
+    """
+    判断状态文案中是否包含任一激活关键字。
+
+    参数:
+        text: 待检测文本
+        keywords: 关键字元组
+    返回:
+        bool: 是否命中
+        AI by zb
+    """
+    normalized_text = str(text or "").strip().lower()
+    if not normalized_text:
+        return False
+    return any(str(keyword or "").strip().lower() in normalized_text for keyword in keywords if str(keyword or "").strip())
+
+
+def _format_activation_payload_for_log(data: Any) -> str:
+    """
+    将激活接口返回内容格式化为适合后台日志输出的单行文本。
+
+    参数:
+        data: 任意接口返回内容
+    返回:
+        str: 可直接打印的日志文本
+        AI by zb
+    """
+    if data is None:
+        return "null"
+    try:
+        return json.dumps(data, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    except Exception:
+        return str(data)
+
+
 def _infer_activation_success(final_data: Dict[str, Any]) -> bool:
     """
     按任务查询接口标准字段判断当前激活是否最终成功。
@@ -203,10 +273,37 @@ def _infer_activation_success(final_data: Dict[str, Any]) -> bool:
         bool: 是否成功
         AI by zb
     """
-    explicit_success = _coerce_activation_success_flag((final_data or {}).get("success"))
-    state = str((final_data or {}).get("state") or "").strip().lower()
-    status = str((final_data or {}).get("status") or "").strip().lower()
-    return state == "completed" and explicit_success is True and status == "success"
+    explicit_success = _coerce_activation_success_flag(_get_activation_scalar_value(final_data, "success"))
+    state = str(_get_activation_scalar_value(final_data, "state") or "").strip().lower()
+    status = str(_get_activation_scalar_value(final_data, "status") or "").strip().lower()
+    combined_text = _collect_activation_response_text(final_data)
+    success_terminal_states = {"completed", "success", "succeeded", "done"}
+    terminal_success_state = state in success_terminal_states or (not state and status in success_terminal_states)
+    has_failure_keyword = (
+        _contains_any_activation_keyword(combined_text, ACTIVATION_FAILURE_MESSAGE_KEYWORDS)
+        or any(keyword in status for keyword in ("invalid", "fail", "error", "cancelled", "canceled"))
+    )
+    has_cancel_keyword = _contains_any_activation_keyword(combined_text, ACTIVATION_CANCEL_MESSAGE_KEYWORDS)
+    has_success_keyword = (
+        _contains_any_activation_keyword(combined_text, ACTIVATION_SUCCESS_MESSAGE_KEYWORDS)
+        or ((("成功" in combined_text) or ("已升级" in combined_text) or ("升级完成" in combined_text)) and "请求" not in combined_text)
+    )
+
+    if not terminal_success_state:
+        return False
+    if has_failure_keyword or has_cancel_keyword:
+        return False
+    if explicit_success is True and status in {"success", "completed", "succeeded", "done"}:
+        return True
+    if explicit_success is True and not status:
+        return True
+    if explicit_success is True and has_success_keyword:
+        return True
+    if status in {"success", "completed", "succeeded", "done"} and explicit_success is not False:
+        return True
+    if has_success_keyword and explicit_success is not False:
+        return True
+    return False
 
 
 def _is_cancelled_activation_result(final_data: Optional[Dict[str, Any]]) -> bool:
@@ -221,9 +318,14 @@ def _is_cancelled_activation_result(final_data: Optional[Dict[str, Any]]) -> boo
     """
     if not isinstance(final_data, dict):
         return False
-    state = str(final_data.get("state") or "").strip().lower()
-    status = str(final_data.get("status") or "").strip().lower()
-    return state in {"cancelled", "canceled"} or status in {"cancelled", "canceled"}
+    state = str(_get_activation_scalar_value(final_data, "state") or "").strip().lower()
+    status = str(_get_activation_scalar_value(final_data, "status") or "").strip().lower()
+    combined_text = _collect_activation_response_text(final_data)
+    return (
+        state in {"cancelled", "canceled"}
+        or status in {"cancelled", "canceled"}
+        or _contains_any_activation_keyword(combined_text, ACTIVATION_CANCEL_MESSAGE_KEYWORDS)
+    )
 
 
 def _extract_request_id(data: Optional[Dict[str, Any]]) -> str:
@@ -261,7 +363,7 @@ def _normalize_activation_state(data: Optional[Dict[str, Any]]) -> str:
     """
     if not isinstance(data, dict):
         return ""
-    return str(data.get("state") or data.get("status") or "").strip().lower()
+    return str(_get_activation_scalar_value(data, "state", "status") or "").strip().lower()
 
 
 def _collect_activation_response_text(data: Optional[Dict[str, Any]]) -> str:
@@ -280,6 +382,8 @@ def _collect_activation_response_text(data: Optional[Dict[str, Any]]) -> str:
     text_parts = [
         str(data.get("message") or "").strip(),
         str(data.get("rawMessage") or "").strip(),
+        str(data.get("errorMessage") or "").strip(),
+        str(data.get("errorType") or "").strip(),
         str(data.get("status") or "").strip(),
         str(data.get("state") or "").strip(),
     ]
@@ -289,6 +393,8 @@ def _collect_activation_response_text(data: Optional[Dict[str, Any]]) -> str:
             [
                 str(nested_data.get("message") or "").strip(),
                 str(nested_data.get("rawMessage") or "").strip(),
+                str(nested_data.get("errorMessage") or "").strip(),
+                str(nested_data.get("errorType") or "").strip(),
                 str(nested_data.get("status") or "").strip(),
                 str(nested_data.get("state") or "").strip(),
             ]
@@ -545,10 +651,10 @@ def _summarize_activation_snapshot(snapshot_data: Optional[Dict[str, Any]]) -> s
         AI by zb
     """
     data = dict(snapshot_data or {})
-    state_text = str(data.get("state") or "").strip() or "unknown"
-    success_value = data.get("success")
+    state_text = str(_get_activation_scalar_value(data, "state") or "").strip() or "unknown"
+    success_value = _get_activation_scalar_value(data, "success")
     success_text = "null" if success_value is None else str(success_value).strip()
-    status_text = str(data.get("status") or "").strip() or "unknown"
+    status_text = str(_get_activation_scalar_value(data, "status") or "").strip() or "unknown"
     return f"state={state_text} success={success_text} status={status_text}"
 
 
@@ -1009,7 +1115,12 @@ def get_request_status(request_id: str) -> Dict[str, Any]:
     normalized_request_id = str(request_id or "").strip()
     if not normalized_request_id:
         raise RuntimeError("缺少 requestId，无法查询激活任务状态")
-    return _request_json("GET", f"/api/v1/requests/{normalized_request_id}")
+    status_data = _request_json("GET", f"/api/v1/requests/{normalized_request_id}")
+    print(
+        f"📥 激活任务状态原始响应: requestId={normalized_request_id} | "
+        f"{_format_activation_payload_for_log(status_data)}"
+    )
+    return status_data
 
 
 def query_activation_request_result(
@@ -1126,6 +1237,11 @@ def _request_activation(
         raise RuntimeError(
             f"接口返回非 JSON: HTTP {response.status_code} | {response.text[:200]}"
         ) from exc
+
+    print(
+        f"📥 {action_label} 激活提交原始响应: HTTP {response.status_code} | "
+        f"{_format_activation_payload_for_log(data)}"
+    )
 
     if not response.ok:
         raise RuntimeError(
@@ -1491,6 +1607,11 @@ def _poll_submitted_activation_result(
         accepted=True,
     )
     snapshot_summary = _summarize_activation_snapshot(final_snapshot)
+    print(
+        f"🧾 {action_label} 激活最终判定: requestId={request_id} | "
+        f"success={final_result.success} stage={final_result.stage} accepted={final_result.accepted} "
+        f"status={final_result.status or 'unknown'} message={final_result.message or ''}"
+    )
 
     if final_result.success:
         print(f"✅ {action_label} 激活轮询完成: requestId={request_id} {snapshot_summary}")
