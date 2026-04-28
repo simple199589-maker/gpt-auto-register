@@ -27,6 +27,31 @@
 - `/data/gpt-auto-register/output_tokens/`：OAuth token 输出目录。
 - `/data/gpt-auto-register/registered_accounts.txt`：历史账号文件。
 
+## 拉取项目
+
+服务器上建议把项目代码放到 `/opt/gpt-auto-register`，运行数据放到 `/data/gpt-auto-register`。
+
+创建目录：
+
+```bash
+sudo mkdir -p /opt/gpt-auto-register /data/gpt-auto-register
+sudo chown -R "$USER:$USER" /opt/gpt-auto-register /data/gpt-auto-register
+```
+
+拉取当前部署分支 `auth`：
+
+```bash
+git clone --branch auth --single-branch https://github.com/simple199589-maker/gpt-auto-register.git /opt/gpt-auto-register
+cd /opt/gpt-auto-register
+```
+
+如果目录已经存在且为空，也可以这样拉取到当前目录：
+
+```bash
+cd /opt/gpt-auto-register
+git clone --branch auth --single-branch https://github.com/simple199589-maker/gpt-auto-register.git .
+```
+
 ## 构建与启动
 
 在项目根目录执行：

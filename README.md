@@ -26,7 +26,7 @@ uv run server.py --port 5006
 
 镜像内已包含 Chromium、chromedriver、Xvfb 和 Python 依赖，运行数据统一挂载到宿主机 `/data/gpt-auto-register/`，容器内路径为 `/data`。
 
-完整部署说明见：`docs/docker-deploy.md`。
+完整部署说明见：[docs/docker-deploy.md](docs/docker-deploy.md)。
 
 ```bash
 docker compose build
