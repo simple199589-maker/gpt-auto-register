@@ -20,6 +20,15 @@ uv run server.py
 uv run server.py --port 5006
 ```
 
+首次进入 Web 控制台需要输入管理密码，默认配置项为：
+
+```yaml
+web:
+  admin_password: "admin"
+```
+
+部署前请修改 `config.yaml` 中的 `web.admin_password`。
+
 在控制台中进入“账号管理”，导入邮箱和密码，然后点击“启动登录上传”或对单个账号执行“登录并上传”。
 
 ## Docker 部署
@@ -34,6 +43,11 @@ docker compose up -d
 ```
 
 首次启动会自动生成 `/data/gpt-auto-register/config.yaml`。修改该文件中的邮箱、Sub2Api、代理等配置后重启：
+
+```yaml
+web:
+  admin_password: "your-admin-password"
+```
 
 ```bash
 docker compose restart

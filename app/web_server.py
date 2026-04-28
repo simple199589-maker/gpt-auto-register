@@ -1,4 +1,5 @@
 import argparse
+import hmac
 import json
 import logging
 import threading
@@ -7,9 +8,10 @@ import builtins
 import os
 import random
 import re
+import secrets
 from datetime import datetime
 from pathlib import Path
-from flask import Flask, Response, jsonify, request
+from flask import Flask, Response, jsonify, redirect, request, session, url_for
 
 # 导入业务逻辑
 import app.register as main
@@ -27,6 +29,79 @@ from app.utils import get_account_record, parse_account_record, sanitize_account
 STATIC_DIR = Path(__file__).resolve().with_name("static")
 
 app = Flask(__name__, static_url_path="", static_folder=str(STATIC_DIR))
+app.secret_key = os.environ.get("WEB_SESSION_SECRET") or secrets.token_hex(32)
+
+AUTH_SESSION_KEY = "web_admin_authenticated"
+PUBLIC_AUTH_PATHS = {
+    "/login",
+    "/api/auth/login",
+    "/api/auth/logout",
+    "/api/auth/status",
+}
+
+
+def get_admin_password() -> str:
+    """
+    获取当前配置中的 Web 管理密码。
+
+    返回:
+        str: 管理密码，空字符串表示关闭鉴权
+        AI by zb
+    """
+    return str(getattr(getattr(cfg, "web", None), "admin_password", "") or "").strip()
+
+
+def is_authentication_enabled() -> bool:
+    """
+    判断 Web 管理密码鉴权是否启用。
+
+    返回:
+        bool: 是否启用鉴权
+        AI by zb
+    """
+    return bool(get_admin_password())
+
+
+def is_admin_authenticated() -> bool:
+    """
+    判断当前请求是否已通过管理密码鉴权。
+
+    返回:
+        bool: 是否已授权
+        AI by zb
+    """
+    if not is_authentication_enabled():
+        return True
+    return bool(session.get(AUTH_SESSION_KEY))
+
+
+def build_unauthorized_response():
+    """
+    构造未授权响应，API 返回 JSON，页面跳转登录页。
+
+    返回:
+        Response: Flask 响应
+        AI by zb
+    """
+    if request.path.startswith("/api/"):
+        return jsonify({"success": False, "authenticated": False, "error": "未授权，请先登录"}), 401
+    return redirect(url_for("login_page"))
+
+
+@app.before_request
+def require_admin_authentication():
+    """
+    在进入 Web 控制台和 API 前校验管理密码登录态。
+
+    返回:
+        Response | None: 未授权响应或继续请求
+        AI by zb
+    """
+    if request.path in PUBLIC_AUTH_PATHS:
+        return None
+    if is_admin_authenticated():
+        return None
+    return build_unauthorized_response()
 
 # ==========================================
 # 🔧 状态管理与日志捕获
@@ -864,8 +939,208 @@ def build_account_import_item(record: dict) -> dict:
 # 🌐 API 接口
 # ==========================================
 
+@app.route('/login')
+def login_page():
+    """
+    渲染 Web 控制台管理密码登录页。
+
+    返回:
+        Response: 登录页 HTML
+        AI by zb
+    """
+    if is_admin_authenticated():
+        return redirect(url_for("index"))
+    return Response(
+        """
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoGPT Console Login</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            background: #f4f7fb;
+            color: #172033;
+            font-family: Arial, "Microsoft YaHei", sans-serif;
+        }
+        .login-panel {
+            width: min(420px, calc(100vw - 32px));
+            padding: 32px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            background: #ffffff;
+            box-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
+        }
+        h1 {
+            margin: 0 0 8px;
+            font-size: 24px;
+            line-height: 1.3;
+        }
+        p {
+            margin: 0 0 24px;
+            color: #64748b;
+            font-size: 14px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #334155;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        input {
+            width: 100%;
+            height: 44px;
+            padding: 0 12px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            font-size: 15px;
+            outline: none;
+        }
+        input:focus {
+            border-color: #2563eb;
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+        }
+        button {
+            width: 100%;
+            height: 44px;
+            margin-top: 18px;
+            border: 0;
+            border-radius: 6px;
+            background: #2563eb;
+            color: #ffffff;
+            font-size: 15px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
+        .error {
+            min-height: 20px;
+            margin-top: 12px;
+            color: #dc2626;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <main class="login-panel">
+        <h1>AutoGPT Console</h1>
+        <p>请输入管理密码后进入系统。</p>
+        <form id="login-form">
+            <label for="password">管理密码</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" autofocus>
+            <button id="submit-button" type="submit">登录</button>
+            <div id="error-message" class="error"></div>
+        </form>
+    </main>
+    <script>
+        const form = document.getElementById('login-form')
+        const passwordInput = document.getElementById('password')
+        const button = document.getElementById('submit-button')
+        const errorMessage = document.getElementById('error-message')
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault()
+            errorMessage.textContent = ''
+            button.disabled = true
+            try {
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: passwordInput.value }),
+                })
+                const data = await response.json().catch(() => ({}))
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || data.message || '登录失败')
+                }
+                window.location.href = '/'
+            } catch (error) {
+                errorMessage.textContent = error.message || '登录失败'
+            } finally {
+                button.disabled = false
+            }
+        })
+    </script>
+</body>
+</html>
+        """.strip(),
+        mimetype="text/html",
+    )
+
+
+@app.route('/api/auth/status')
+def auth_status():
+    """
+    查询当前 Web 管理密码登录状态。
+
+    返回:
+        Response: JSON 响应
+        AI by zb
+    """
+    return jsonify(
+        {
+            "success": True,
+            "enabled": is_authentication_enabled(),
+            "authenticated": is_admin_authenticated(),
+        }
+    )
+
+
+@app.route('/api/auth/login', methods=['POST'])
+def auth_login():
+    """
+    使用配置中的管理密码登录 Web 控制台。
+
+    返回:
+        Response: JSON 响应
+        AI by zb
+    """
+    if not is_authentication_enabled():
+        session[AUTH_SESSION_KEY] = True
+        return jsonify({"success": True, "authenticated": True})
+
+    data = request.json if request.is_json else request.form
+    password = str((data or {}).get("password") or "")
+    admin_password = get_admin_password()
+    if not hmac.compare_digest(password, admin_password):
+        session.pop(AUTH_SESSION_KEY, None)
+        return jsonify({"success": False, "authenticated": False, "error": "管理密码错误"}), 401
+
+    session[AUTH_SESSION_KEY] = True
+    return jsonify({"success": True, "authenticated": True})
+
+
+@app.route('/api/auth/logout', methods=['POST'])
+def auth_logout():
+    """
+    退出 Web 控制台管理密码登录态。
+
+    返回:
+        Response: JSON 响应
+        AI by zb
+    """
+    session.pop(AUTH_SESSION_KEY, None)
+    return jsonify({"success": True, "authenticated": False})
+
+
 @app.route('/')
 def index():
+    """
+    渲染 Web 控制台首页。
+
+    返回:
+        Response: 首页 HTML
+        AI by zb
+    """
     return app.send_static_file("index.html")
 
 @app.route('/api/status')

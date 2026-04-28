@@ -11,6 +11,10 @@ registration:
   min_age: 20            # 历史注册模块保留字段
   max_age: 40            # 历史注册模块保留字段
 
+# Web 控制台管理密码；留空表示关闭登录鉴权
+web:
+  admin_password: "admin"
+
 # 邮箱服务
 email:
   # provider 可选：worker / outlook

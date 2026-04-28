@@ -214,6 +214,13 @@ body::after {
     font-size: 15px;
 }
 
+.logout-action.ant-btn {
+    height: 36px;
+    border-radius: 10px;
+    font-weight: 700;
+    color: var(--text-sub);
+}
+
 .settings-card .ant-card-body {
     display: flex;
     flex-direction: column;
@@ -336,6 +343,16 @@ body::after {
     flex-wrap: wrap;
     gap: 6px;
     justify-content: flex-end;
+}
+
+.topbar-link-tag {
+    display: inline-flex;
+    text-decoration: none;
+}
+
+.topbar-link-tag .ant-tag {
+    cursor: pointer;
+    margin-inline-end: 0;
 }
 
 .meta-chip {

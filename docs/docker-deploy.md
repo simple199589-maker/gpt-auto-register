@@ -77,6 +77,13 @@ http://localhost:5005
 
 编辑该文件，填写邮箱、Sub2Api、Team 管理、代理等配置后重启：
 
+其中 Web 控制台管理密码配置如下，部署前请改掉默认值：
+
+```yaml
+web:
+  admin_password: "your-admin-password"
+```
+
 ```bash
 docker compose restart
 ```

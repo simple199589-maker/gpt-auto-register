@@ -200,13 +200,37 @@
                                 <clock-circle-outlined></clock-circle-outlined>
                                 <span>更新时间 {{ lastUpdate }}</span>
                             </div>
+                            <a-button class="logout-action" @click="handleLogout">
+                                <template #icon>
+                                    <logout-outlined></logout-outlined>
+                                </template>
+                                退出
+                            </a-button>
                         </div>
 
-                        <div v-if="currentTab === 'accounts'" class="topbar-tags">
-                            <a-tag color="blue">账号数 {{ accountPagination.total }}</a-tag>
-                            <a-tag :color="settings.sub2api_auto_upload_enabled ? 'cyan' : 'default'">
+                        <div class="topbar-tags">
+                            <a-tag v-if="currentTab === 'accounts'" color="blue">账号数 {{ accountPagination.total }}</a-tag>
+                            <a-tag v-if="currentTab === 'accounts'" :color="settings.sub2api_auto_upload_enabled ? 'cyan' : 'default'">
                                 Sub2Api {{ settings.sub2api_auto_upload_enabled ? 'ON' : 'OFF' }}
                             </a-tag>
+                            <a
+                                class="topbar-link-tag"
+                                href="https://team.joini.cloud/admin/"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title="打开 Team 管理"
+                            >
+                                <a-tag color="geekblue">Team管理</a-tag>
+                            </a>
+                            <a
+                                class="topbar-link-tag"
+                                href="https://joini.cloud/"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title="打开中转分发"
+                            >
+                                <a-tag color="purple">中转分发</a-tag>
+                            </a>
                         </div>
                     </div>
                 </header>

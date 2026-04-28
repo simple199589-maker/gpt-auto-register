@@ -311,6 +311,13 @@ class TeamManageConfig:
 
 
 @dataclass
+class WebConfig:
+    """Web 控制台配置。AI by zb"""
+
+    admin_password: str = "admin"
+
+
+@dataclass
 class AppConfig:
     """应用程序完整配置"""
     registration: RegistrationConfig = field(default_factory=RegistrationConfig)
@@ -327,6 +334,7 @@ class AppConfig:
     activation_api: ActivationApiConfig = field(default_factory=ActivationApiConfig)
     sub2api: Sub2ApiAppConfig = field(default_factory=Sub2ApiAppConfig)
     team_manage: TeamManageConfig = field(default_factory=TeamManageConfig)
+    web: WebConfig = field(default_factory=WebConfig)
 
 
 # ==============================================================
@@ -811,6 +819,12 @@ class ConfigLoader:
                 api_key=str(team_manage.get('api_key', self.config.team_manage.api_key)).strip(),
             )
 
+        if 'web' in self.raw_config:
+            web = self.raw_config['web'] or {}
+            self.config.web = WebConfig(
+                admin_password=str(web.get('admin_password', self.config.web.admin_password)).strip(),
+            )
+
     def update_automation_settings(
         self,
         plus_auto_activate: Optional[bool] = None,
@@ -1046,6 +1060,9 @@ PLUS_MODE = cfg.plus.mode
 # Team 管理配置
 TEAM_MANAGE_BASE_URL = cfg.team_manage.base_url
 TEAM_MANAGE_API_KEY = cfg.team_manage.api_key
+
+# Web 控制台配置
+WEB_ADMIN_PASSWORD = cfg.web.admin_password
 
 
 # ==============================================================

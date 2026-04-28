@@ -12,10 +12,12 @@ class WebServerLoginSub2ApiTests(unittest.TestCase):
 
     def setUp(self) -> None:
         """创建 Flask 测试客户端。AI by zb"""
-        from app.web_server import app, manual_otp_broker, state
+        from app.web_server import AUTH_SESSION_KEY, app, manual_otp_broker, state
 
         self.app = app
         self.client = app.test_client()
+        with self.client.session_transaction() as session:
+            session[AUTH_SESSION_KEY] = True
         state.is_running = False
         with manual_otp_broker._condition:
             manual_otp_broker._challenges.clear()

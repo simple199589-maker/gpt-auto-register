@@ -1249,6 +1249,15 @@ const app = createApp({
             }
         }
 
+        async function handleLogout() {
+            try {
+                await requestJson('/api/auth/logout', { method: 'POST' })
+                window.location.href = '/login'
+            } catch (error) {
+                showError(error.message)
+            }
+        }
+
         function handleMenuClick({ key }) {
             currentTab.value = key
         }
@@ -1479,6 +1488,7 @@ const app = createApp({
             handleGroupIdsBlur,
             handleImportJsonFileChange,
             handleLoginSub2Api,
+            handleLogout,
             handleUploadSub2Api,
             handleUploadTeamManage,
             hasAccountActions,
