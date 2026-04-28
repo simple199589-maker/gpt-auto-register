@@ -1,7 +1,7 @@
 [project]
 name = "chatgpt-auto-register"
 version = "0.1.0"
-description = "Automated ChatGPT account registration and management tool using Selenium."
+description = "Account login verification and Sub2Api upload tool."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

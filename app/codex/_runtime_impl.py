@@ -20,7 +20,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
@@ -30,6 +30,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from app.codex.sub2api import Sub2ApiConfig, Sub2ApiUploader, normalize_group_ids
+from app.proxy import proxy_config_to_url
 
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -171,10 +172,7 @@ def resolve_proxy(config: Dict[str, Any], override_proxy: str = "") -> str:
     """
     if str(override_proxy or "").strip():
         return str(override_proxy).strip()
-    proxy_cfg = config.get("proxy") or {}
-    if isinstance(proxy_cfg, dict):
-        return str(proxy_cfg.get("http") or proxy_cfg.get("https") or "").strip()
-    return ""
+    return proxy_config_to_url(config.get("proxy") or {})
 
 
 def create_session(proxy: str = "") -> requests.Session:
@@ -1006,6 +1004,7 @@ def perform_http_oauth_login(
     proxy: str = "",
     otp_mode: str = "auto",
     mailbox_context: str = "",
+    otp_provider: Optional[Callable[[str, int, logging.Logger], Optional[str]]] = None,
     oauth_issuer: str = OPENAI_AUTH_BASE,
     oauth_client_id: str = OAUTH_CLIENT_ID,
     oauth_redirect_uri: str = OAUTH_REDIRECT_URI,
@@ -1020,6 +1019,7 @@ def perform_http_oauth_login(
         proxy: 代理地址
         otp_mode: OTP 模式，auto 或 manual
         mailbox_context: 邮箱上下文
+        otp_provider: 可选手填验证码提供器
         oauth_issuer: OAuth 服务根地址
         oauth_client_id: 客户端 ID
         oauth_redirect_uri: 回调地址
@@ -1189,8 +1189,11 @@ def perform_http_oauth_login(
                     logger=active_logger,
                 )
 
-        if not otp_code:
-            otp_code = prompt_for_email_otp(email=email, logger=active_logger, timeout=300)
+        if not otp_code and otp_mode == "manual":
+            if otp_provider:
+                otp_code = otp_provider(email, 300, active_logger)
+            else:
+                otp_code = prompt_for_email_otp(email=email, logger=active_logger, timeout=300)
         if not otp_code:
             return None
 
@@ -1571,7 +1574,11 @@ def upload_to_sub2api(
         AI by zb
     """
     active_logger = logger or get_logger()
-    uploader = Sub2ApiUploader(create_session(), build_sub2api_config(config), active_logger)
+    uploader = Sub2ApiUploader(
+        create_session(proxy=resolve_proxy(config, "")),
+        build_sub2api_config(config),
+        active_logger,
+    )
     return uploader.push_account(email, tokens)
 
 

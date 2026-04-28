@@ -13,69 +13,10 @@ import json
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-
-
-DEFAULT_SUB2API_MODEL_MAPPING: Dict[str, str] = {
-    "gpt-3.5-turbo": "gpt-3.5-turbo",
-    "gpt-3.5-turbo-0125": "gpt-3.5-turbo-0125",
-    "gpt-3.5-turbo-1106": "gpt-3.5-turbo-1106",
-    "gpt-3.5-turbo-16k": "gpt-3.5-turbo-16k",
-    "gpt-4": "gpt-4",
-    "gpt-4-turbo": "gpt-4-turbo",
-    "gpt-4-turbo-preview": "gpt-4-turbo-preview",
-    "gpt-4o": "gpt-4o",
-    "gpt-4o-2024-08-06": "gpt-4o-2024-08-06",
-    "gpt-4o-2024-11-20": "gpt-4o-2024-11-20",
-    "gpt-4o-mini": "gpt-4o-mini",
-    "gpt-4o-mini-2024-07-18": "gpt-4o-mini-2024-07-18",
-    "gpt-4.5-preview": "gpt-4.5-preview",
-    "gpt-4.1": "gpt-4.1",
-    "gpt-4.1-mini": "gpt-4.1-mini",
-    "gpt-4.1-nano": "gpt-4.1-nano",
-    "o1": "o1",
-    "o1-preview": "o1-preview",
-    "o1-mini": "o1-mini",
-    "o1-pro": "o1-pro",
-    "o3": "o3",
-    "o3-mini": "o3-mini",
-    "o3-pro": "o3-pro",
-    "o4-mini": "o4-mini",
-    "gpt-5": "gpt-5",
-    "gpt-5-2025-08-07": "gpt-5-2025-08-07",
-    "gpt-5-chat": "gpt-5-chat",
-    "gpt-5-chat-latest": "gpt-5-chat-latest",
-    "gpt-5-codex": "gpt-5-codex",
-    "gpt-5.3-codex-spark": "gpt-5.3-codex-spark",
-    "gpt-5-pro": "gpt-5-pro",
-    "gpt-5-pro-2025-10-06": "gpt-5-pro-2025-10-06",
-    "gpt-5-mini": "gpt-5-mini",
-    "gpt-5-mini-2025-08-07": "gpt-5-mini-2025-08-07",
-    "gpt-5-nano": "gpt-5-nano",
-    "gpt-5-nano-2025-08-07": "gpt-5-nano-2025-08-07",
-    "gpt-5.1": "gpt-5.1",
-    "gpt-5.1-2025-11-13": "gpt-5.1-2025-11-13",
-    "gpt-5.1-chat-latest": "gpt-5.1-chat-latest",
-    "gpt-5.1-codex": "gpt-5.1-codex",
-    "gpt-5.1-codex-max": "gpt-5.1-codex-max",
-    "gpt-5.1-codex-mini": "gpt-5.1-codex-mini",
-    "gpt-5.2": "gpt-5.2",
-    "gpt-5.2-2025-12-11": "gpt-5.2-2025-12-11",
-    "gpt-5.2-chat-latest": "gpt-5.2-chat-latest",
-    "gpt-5.2-codex": "gpt-5.2-codex",
-    "gpt-5.2-pro": "gpt-5.2-pro",
-    "gpt-5.2-pro-2025-12-11": "gpt-5.2-pro-2025-12-11",
-    "gpt-5.4": "gpt-5.4",
-    "gpt-5.4-2026-03-05": "gpt-5.4-2026-03-05",
-    "gpt-5.3-codex": "gpt-5.3-codex",
-    "chatgpt-4o-latest": "chatgpt-4o-latest",
-    "gpt-4o-audio-preview": "gpt-4o-audio-preview",
-    "gpt-4o-realtime-preview": "gpt-4o-realtime-preview",
-}
-
 
 def normalize_group_ids(raw_group_ids: Any, default: Optional[List[int]] = None) -> List[int]:
     """将配置中的 group_ids 规范化为整数列表。AI by zb"""
@@ -101,9 +42,6 @@ class Sub2ApiConfig:
     password: str
     group_ids: List[int]
     client_id: str
-    model_mapping: Dict[str, str] = field(
-        default_factory=lambda: DEFAULT_SUB2API_MODEL_MAPPING.copy()
-    )
 
 
 class Sub2ApiUploader:
@@ -202,7 +140,6 @@ class Sub2ApiUploader:
                 "client_id": self.config.client_id,
                 "expires_in": 863999,
                 "expires_at": expires_at,
-                "model_mapping": self.config.model_mapping,
                 "organization_id": organization_id,
                 "refresh_token": refresh_token,
             },

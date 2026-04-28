@@ -1,171 +1,78 @@
-# ChatGPT 账号自动注册工具
+# 账号登录验证与 Sub2Api 上传工具
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/Python-3.13+-3776AB.svg?logo=python&logoColor=white)
 
-基于 Python + Selenium 的 ChatGPT 账号自动化工具，覆盖注册、验证码处理、绑卡开通 Plus 与取消订阅等流程。
-
-## 项目结构
-
-```text
-.
-├── app/                              # 业务核心代码
-│   ├── browser/                      # 浏览器自动化包
-│   │   ├── driver.py
-│   │   ├── signup.py
-│   │   ├── subscription.py
-│   │   └── common.py
-│   ├── codex/                        # Codex 登录与 Sub2Api 上传
-│   │   ├── auth.py
-│   │   ├── otp.py
-│   │   ├── tokens.py
-│   │   ├── runtime.py
-│   │   ├── cli.py
-│   │   └── sub2api.py
-│   ├── static/                       # Web 前端静态资源
-│   ├── config.py
-│   ├── email_service.py
-│   ├── register.py
-│   ├── utils.py
-│   └── web_server.py
-├── scripts/
-│   └── manual/                       # 手工测试/调试脚本
-│       ├── codex_login_manual_test.py
-│       └── email_service_manual_test.py
-├── docs/
-│   ├── assets/
-│   ├── integration/
-│   └── reference/
-├── main.py                           # 命令行批量注册入口
-├── server.py                         # Web 控制台入口
-├── codex_login_tool.py               # Codex 账密直登入口
-├── config.example.yaml               # 配置模板
-├── pyproject.toml
-├── uv.lock
-└── README.md
-```
+本项目当前主流程为：手动导入账号密码，执行 Codex OAuth 登录验证，保存 OAuth token，并按配置上传到 Sub2Api。历史注册、Plus 激活、Team 激活模块仍保留在代码中作为兼容参考，但 Web 控制台入口已经切换到登录上传流程。
 
 ## 快速开始
-
-### 1. 安装依赖
 
 ```bash
 pip install uv
 uv sync
-```
-
-### 2. 准备配置
-
-```bash
 cp config.example.yaml config.yaml
 ```
 
-然后编辑 `config.yaml`，填入邮箱服务、浏览器与支付相关配置。
-
-### 3. 运行入口
-
-Web 控制台：
+编辑 `config.yaml` 后启动 Web 控制台：
 
 ```bash
 uv run server.py
-uv run server.py 5006
 uv run server.py --port 5006
-uv run server.py --port 5006 --api 1
 ```
 
-命令行批量注册：
+在控制台中进入“账号管理”，导入邮箱和密码，然后点击“启动登录上传”或对单个账号执行“登录并上传”。
 
-```bash
-uv run main.py
-```
+## 命令行验证
 
 Codex 账密直登：
 
 ```bash
-uv run codex_login_tool.py --email your@example.com --password your-password
+uv run codex_login_tool.py --email your@example.com --password your-password --otp-mode auto
+uv run codex_login_tool.py --email your@example.com --password your-password --otp-mode manual --skip-upload
 ```
 
-手动 OTP 模式：
+登录到 Sub2Api 编排脚本：
 
 ```bash
-uv run codex_login_tool.py --email your@example.com --password your-password --otp-mode manual
+uv run python scripts/manual/login_sub2api_manual_test.py import --email your@example.com --password your-password
+uv run python scripts/manual/login_sub2api_manual_test.py login --email your@example.com --otp-mode auto
+uv run python scripts/manual/login_sub2api_manual_test.py upload --email your@example.com
 ```
 
-## 手工脚本
-
-邮箱服务手工调试：
+邮箱 provider 调试：
 
 ```bash
-uv run python scripts/manual/email_service_manual_test.py create
-uv run python scripts/manual/email_service_manual_test.py fetch --email test@example.com
+uv run python scripts/manual/email_service_manual_test.py create --provider worker
+uv run python scripts/manual/email_service_manual_test.py create --provider outlook
+uv run python scripts/manual/email_service_manual_test.py fetch --provider outlook --email demo@outlook.com
 ```
 
-Codex 手工登录脚本：
-
-```bash
-uv run python scripts/manual/codex_login_manual_test.py
-```
-
-## 配置说明
-
-所有配置来自根目录 `config.yaml`。
+## 关键配置
 
 ```yaml
-registration:
-  total_accounts: 1
-  min_age: 20
-  max_age: 40
-
 email:
-  worker_url: "https://your-worker.workers.dev"
-  domainIndex: [0, 1, 2]
-  prefix_length: 10
+  provider: "worker"  # worker 或 outlook
+  worker_url: "https://your-worker-name.your-subdomain.workers.dev"
+  domainIndex: [0]
   wait_timeout: 120
   poll_interval: 3
-  admin_password: "your-password"
+  admin_password: "your-worker-admin-password"
 
-browser:
-  max_wait_time: 600
-  short_wait_time: 120
-  user_agent: "..."
-
-password:
-  length: 16
-  charset: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%"
-
-retry:
-  http_max_retries: 5
-  http_timeout: 30
-  error_page_max_retries: 5
-  button_click_max_retries: 3
-  manual_activation_attempts: 3
-
-batch:
-  interval_min: 5
-  interval_max: 15
-
-files:
-  accounts_file: "registered_accounts.txt"
-  accounts_db_file: "data/accounts.db"
-
-payment:
-  credit_card:
-    number: "your-card-number"
-    expiry: "MMYY"
-    expiry_month: "MM"
-    expiry_year: "YYYY"
-    cvc: "xxx"
-
-plus:
-  mode: "activation_api"
-  auto_activate: true
-
-activation_api:
-  base_url: ["https://bot.joini.cloud", "http://127.0.0.1:8000"]
-  api_key: "your_activation_api_key"
-  bearer: ""
+outlook:
+  base_url: "https://your-outlook-mail-station-domain"
+  api_key: "your_outlook_open_api_key"
+  auth_type: "api_key"
+  site_code: "OPENAI"
+  batch_code: ""
+  domain: "outlook.com"
+  refresh: true
+  wait_timeout: 120
   poll_interval: 3
-  poll_timeout: 300
+
+proxy:
+  enabled: false
+  host: "127.0.0.1"
+  port: 7890
 
 sub2api:
   base_url: "https://your-sub2api-domain"
@@ -174,61 +81,42 @@ sub2api:
   password: "your-sub2api-admin-password"
   auto_upload_sub2api: true
   group_ids: [2]
+
+team_manage:
+  base_url: "https://team.joini.cloud"
+  api_key: "your_team_manage_api_key"
 ```
 
-必须配置：
+Sub2Api 上传使用后台 `email/password` 登录获取 bearer；`base_url` 建议填写最终 `https://` 地址，避免网关重定向改写 POST。
 
-| 配置项 | 路径 | 说明 |
-|--------|------|------|
-| Worker 地址 | `email.worker_url` | 你的 cloudflare_temp_email Worker 地址 |
-| 管理员密码 | `email.admin_password` | 邮箱服务管理员密码 |
+母号支持使用已保存的 OAuth 三件套单账号导入 Team 管理；导入接口使用 `X-API-Key` 认证，API Key 填写在 `team_manage.api_key`。
 
-Sub2Api 上传说明：
-
-- `plus.auto_activate=false` 时，注册成功后会跳过 Plus 激活并直接进入 Sub2Api 流程。
-- `activation_api.base_url` 支持字符串或数组；当配置为数组时，启动 `server.py` 可用 `--api <索引>` 选择地址，索引从 `0` 开始，越界会回退到第 `0` 个。
-- 手动点击“重试 Plus”或“激活 Team”时，会按 `retry.manual_activation_attempts` 配置的轮数执行，成功即停止。
-- Codex 上传使用 Sub2Api 后台 `email/password` 登录获取 bearer，不走 `api_key`。
-- `sub2api.base_url` 建议直接填写 `https://` 地址，避免网关 301 把 POST 改写成 GET。
-
-账号存储说明：
-
-- 当前默认使用本地 SQLite 数据库 `data/accounts.db`。
-- 若存在旧的 `registered_accounts.txt`，启动时会自动导入数据库。
+代理开关可在 Web 设置中调整；开启后，Codex 登录、邮箱接口和 Sub2Api 上传请求会使用 `http://host:port`。
 
 ## 模块概览
 
-- `app.config`：配置加载与兼容常量导出。
-- `app.email_service`：临时邮箱创建、拉取邮件、提取验证码。
-- `app.browser`：浏览器驱动、注册流程、订阅流程、公共交互辅助。
-- `app.register`：注册主流程与批量运行入口。
-- `app.web_server`：Web 控制台与状态接口。
-- `app.codex.runtime`：Codex 登录统一门面。
+- `app.login_sub2api`：导入账号、登录验证、保存 token、上传 Sub2Api 的主编排层。
+- `app.codex.runtime`：Codex OAuth 登录和 Sub2Api 上传底层能力。
+- `app.email_service`：邮箱服务门面，按 `email.provider` 分发到 worker 或 Outlook。
+- `app.outlook_email_service`：Outlook Mail Station 开放接口 provider。
+- `app.account_store`：SQLite 账号仓储与登录/Sub2Api 状态字段。
+- `app.web_server`：Web 控制台与 API。
 
-## 补充文档
+## 状态字段
 
-- API 参考：`docs/reference/api.md`
-- Sub2Api 集成说明：`docs/integration/admin_payment_integration_api.md`
-- 调试截图资源：`docs/assets/debug_no_plus_btn.png`
+- 登录状态：`loginState/loginStatus`，可取 `pending/success/failed/disabled`。
+- Sub2Api 状态：`sub2apiState`，可取 `pending/success/failed/disabled`。
+- token 输出目录：`output_tokens/`。
+- 账号数据库：`data/accounts.db`。
 
-## 输出文件
+## 文档
 
-- 旧账号导入源：`registered_accounts.txt`
-- 账号数据库：`data/accounts.db`
-- Codex token 输出目录：`output_tokens/`
+- Outlook 集成说明：`docs/API_INTEGRATION.md`
+- Sub2Api 参考：`docs/integration/admin_payment_integration_api.md`
 
 ## 注意事项
 
-1. 请勿提交 `config.yaml` 等敏感配置。
-2. 需要正确部署并配置临时邮箱服务。
-3. 注册过程中请勿手动操作浏览器窗口。
-4. 项目中的手工脚本仅用于调试，不属于自动化测试。
-
-## 免责声明
-
-1. 本项目仅供技术学习与研究使用。
-2. 请严格遵守 OpenAI 及相关服务的使用条款。
-3. 使用者需自行承担自动化行为带来的全部风险。
-4. 项目按现状提供，不承诺目标站点变化后的可用性。
-
-
+1. 请勿提交 `config.yaml`、真实 API Key、账号密码或 token。
+2. Outlook 开放接口当前用于收件和验证码提取；发信能力未在开放接口中提供时会明确返回不支持。
+3. 历史注册/激活模块未在本阶段删除，但 Web 主入口不再调用。
+4. 本项目仅供技术学习与研究使用，请遵守相关服务条款。

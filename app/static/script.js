@@ -9,6 +9,8 @@ const antMessage = antNamespace.message || (antPlugin && antPlugin.message) || n
 function registerAntComponents(appInstance) {
     const menuComponent = antNamespace.Menu || (antPlugin && antPlugin.Menu)
     const selectComponent = antNamespace.Select || (antPlugin && antPlugin.Select)
+    const radioComponent = antNamespace.Radio || (antPlugin && antPlugin.Radio)
+    const checkboxComponent = antNamespace.Checkbox || (antPlugin && antPlugin.Checkbox)
     const componentPairs = [
         ['AMenu', menuComponent],
         ['AMenuItem', (menuComponent && (menuComponent.Item || menuComponent.MenuItem)) || antNamespace.MenuItem],
@@ -25,6 +27,11 @@ function registerAntComponents(appInstance) {
         ['APagination', antNamespace.Pagination || (antPlugin && antPlugin.Pagination)],
         ['ATooltip', antNamespace.Tooltip || (antPlugin && antPlugin.Tooltip)],
         ['APopover', antNamespace.Popover || (antPlugin && antPlugin.Popover)],
+        ['AModal', antNamespace.Modal || (antPlugin && antPlugin.Modal)],
+        ['ARadioGroup', (radioComponent && radioComponent.Group) || antNamespace.RadioGroup],
+        ['ARadio', radioComponent],
+        ['ACheckboxGroup', (checkboxComponent && checkboxComponent.Group) || antNamespace.CheckboxGroup],
+        ['ACheckbox', checkboxComponent],
     ]
 
     componentPairs.forEach(([name, component]) => {
@@ -109,8 +116,6 @@ function formatTimeCompact(value) {
     return `${match[2]}-${match[3]} ${match[4]}:${match[5]}`
 }
 
-const DELIVERY_VENDOR_STORAGE_KEY = 'gpt-auto-register.delivery-vendor'
-
 function resolveStatusTone(kind) {
     if (kind === 'failed') {
         return 'danger'
@@ -144,28 +149,18 @@ function classifyOverallStatus(record) {
     return 'pending'
 }
 
-function classifyPlusStatus(record) {
-    if (record && record.plusState) {
-        return String(record.plusState)
+function classifyLoginStatus(record) {
+    if (record && (record.loginState || record.loginStatus)) {
+        return String(record.loginState || record.loginStatus)
     }
-    const plusStatus = String(record && record.plusStatus || '')
-
-    if (record && record.plusSuccess) {
-        return 'success'
-    }
-    if (plusStatus.includes('关闭') || plusStatus.includes('跳过')) {
-        return 'disabled'
-    }
-    if (plusStatus.includes('处理中') || plusStatus.includes('取消中') || plusStatus.includes('已提交')) {
-        return 'pending'
-    }
-    if (!record || (!record.plusCalled && !plusStatus)) {
-        return 'idle'
-    }
-    if (record.plusCalled && !record.plusSuccess) {
+    const status = String(record && record.status || '')
+    if (status.includes('登录失败') || status.includes('Token获取失败')) {
         return 'failed'
     }
-    return 'idle'
+    if (status.includes('登录成功') || status.includes('已上传Sub2Api')) {
+        return 'success'
+    }
+    return 'pending'
 }
 
 function classifySub2ApiStatus(record) {
@@ -181,6 +176,24 @@ function classifySub2ApiStatus(record) {
         return 'disabled'
     }
     if (!subStatus || subStatus.includes('待上传') || subStatus.includes('未上传')) {
+        return 'pending'
+    }
+    return 'failed'
+}
+
+function classifyTeamManageStatus(record) {
+    if (record && record.teamManageState) {
+        return String(record.teamManageState)
+    }
+    const status = String(record && record.teamManageStatus || '')
+
+    if (record && record.teamManageUploaded) {
+        return 'success'
+    }
+    if (status.includes('未启用')) {
+        return 'disabled'
+    }
+    if (!status || status.includes('待上传') || status.includes('未上传')) {
         return 'pending'
     }
     return 'failed'
@@ -213,32 +226,42 @@ const app = createApp({
         const actionPopoverOpen = reactive({})
         const showManualAccountPanel = ref(false)
         const manualAccountSubmitting = ref(false)
-        const lastActivationRefreshAt = ref(0)
         const manualAccountForm = reactive({
             email: '',
             password: '',
-            accessToken: ''
+            accountCategory: 'normal'
         })
-        const deliverySettings = reactive({
-            vendor: window.localStorage.getItem(DELIVERY_VENDOR_STORAGE_KEY) || '咸鱼'
+        const loginUploadModalOpen = ref(false)
+        const loginUploadRecord = ref(null)
+        const loginUploadSubmitting = ref(false)
+        const loginOtpSubmitting = ref(false)
+        const loginUploadForm = reactive({
+            otpMode: 'auto',
+            uploadTargets: ['sub2api'],
+            otpCode: ''
         })
         const serverSettings = reactive({
-            plus_auto_activate_enabled: false,
-            sub2api_auto_upload_enabled: false,
-            sub2api_group_ids: []
-        })
-        const settings = reactive({
-            plus_auto_activate_enabled: false,
             sub2api_auto_upload_enabled: false,
             sub2api_group_ids: [],
-            sub2api_group_ids_text: ''
+            proxy_enabled: false,
+            proxy_host: '',
+            proxy_port: 0
+        })
+        const settings = reactive({
+            sub2api_auto_upload_enabled: false,
+            sub2api_group_ids: [],
+            sub2api_group_ids_text: '',
+            proxy_enabled: false,
+            proxy_host: '',
+            proxy_port: 0,
+            proxy_port_text: ''
         })
         const accountFilters = reactive({
             keyword: '',
-            registration: 'all',
-            overall: 'all',
-            plus: 'all',
-            sub2api: 'all'
+            category: 'all',
+            login: 'all',
+            sub2api: 'all',
+            teamManage: 'all'
         })
         const accountPagination = reactive({
             current: 1,
@@ -251,15 +274,13 @@ const app = createApp({
         const accountColumns = [
             { title: '邮箱', dataIndex: 'email', key: 'email', width: 210 },
             { title: '密码', dataIndex: 'password', key: 'password', width: 118 },
-            { title: '状态', dataIndex: 'status', key: 'status', width: 154 },
+            { title: '分类', key: 'category', width: 88 },
+            { title: '登录状态', dataIndex: 'status', key: 'status', width: 154 },
             { title: '上传', key: 'sub2api', width: 128 },
+            { title: 'Team', key: 'teamManage', width: 128 },
             { title: '时间', dataIndex: 'time', key: 'time', width: 116 },
             { title: '', key: 'actions', width: 64, fixed: 'right' }
         ]
-
-        function persistDeliverySettings() {
-            window.localStorage.setItem(DELIVERY_VENDOR_STORAGE_KEY, String(deliverySettings.vendor || '').trim() || '咸鱼')
-        }
 
         const totalAccountPages = computed(() => {
             return Math.max(Number(accountPagination.totalPages || 1), 1)
@@ -291,16 +312,21 @@ const app = createApp({
         })
 
         function syncSettings(data) {
-            serverSettings.plus_auto_activate_enabled = Boolean(data && data.plus_auto_activate_enabled)
             serverSettings.sub2api_auto_upload_enabled = Boolean(data && data.sub2api_auto_upload_enabled)
             serverSettings.sub2api_group_ids = Array.isArray(data && data.sub2api_group_ids)
                 ? data.sub2api_group_ids.map((item) => Number(item)).filter((item) => Number.isInteger(item))
                 : []
+            serverSettings.proxy_enabled = Boolean(data && data.proxy_enabled)
+            serverSettings.proxy_host = String(data && data.proxy_host || '')
+            serverSettings.proxy_port = Number(data && data.proxy_port || 0)
 
             if (!settingsSaving.value) {
-                settings.plus_auto_activate_enabled = serverSettings.plus_auto_activate_enabled
                 settings.sub2api_auto_upload_enabled = serverSettings.sub2api_auto_upload_enabled
                 settings.sub2api_group_ids = [...serverSettings.sub2api_group_ids]
+                settings.proxy_enabled = serverSettings.proxy_enabled
+                settings.proxy_host = serverSettings.proxy_host
+                settings.proxy_port = serverSettings.proxy_port
+                settings.proxy_port_text = serverSettings.proxy_port ? String(serverSettings.proxy_port) : ''
                 if (!groupIdsInputFocused.value) {
                     settings.sub2api_group_ids_text = serverSettings.sub2api_group_ids.join(',')
                 }
@@ -314,6 +340,21 @@ const app = createApp({
                 .map((item) => item.trim())
                 .filter((item) => /^-?\d+$/.test(item))
                 .map((item) => Number(item))
+        }
+
+        function parseProxyPortInput(text) {
+            const port = Number.parseInt(String(text || '').trim(), 10)
+            return Number.isInteger(port) && port >= 0 && port <= 65535 ? port : 0
+        }
+
+        function restoreSettingsFromServer() {
+            settings.sub2api_auto_upload_enabled = serverSettings.sub2api_auto_upload_enabled
+            settings.sub2api_group_ids = [...serverSettings.sub2api_group_ids]
+            settings.sub2api_group_ids_text = serverSettings.sub2api_group_ids.join(',')
+            settings.proxy_enabled = serverSettings.proxy_enabled
+            settings.proxy_host = serverSettings.proxy_host
+            settings.proxy_port = serverSettings.proxy_port
+            settings.proxy_port_text = serverSettings.proxy_port ? String(serverSettings.proxy_port) : ''
         }
 
         function updateMonitorState(data) {
@@ -357,13 +398,6 @@ const app = createApp({
                     logIndex.value += data.logs.length
                 }
 
-                if (currentTab.value === 'accounts' && !accountsLoading.value && !isActivationPipelineBusy()) {
-                    const now = Date.now()
-                    if (now - Number(lastActivationRefreshAt.value || 0) >= 5000) {
-                        lastActivationRefreshAt.value = now
-                        void refreshPendingActivationStatuses(true)
-                    }
-                }
             } catch (error) {
                 console.error('Polling error:', error)
             }
@@ -381,22 +415,8 @@ const app = createApp({
             }
         }
 
-        /**
-         * 判断当前页面是否已有手动 Plus / Team 激活线路在执行。
-         *
-         * @author AI by zb
-         */
         function isActivationPipelineBusy() {
-            const action = String(currentAction.value || '').trim().toLowerCase()
-            if (!action) {
-                return false
-            }
-            const actionLabel = action.split(':', 1)[0].split('：', 1)[0]
-            return (
-                actionLabel.includes('plus')
-                || actionLabel.includes('team')
-                || actionLabel.includes('激活')
-            )
+            return false
         }
 
         async function startTask() {
@@ -432,10 +452,7 @@ const app = createApp({
 
         async function saveAutomationSettings() {
             if (isRunning.value) {
-                settings.plus_auto_activate_enabled = serverSettings.plus_auto_activate_enabled
-                settings.sub2api_auto_upload_enabled = serverSettings.sub2api_auto_upload_enabled
-                settings.sub2api_group_ids = [...serverSettings.sub2api_group_ids]
-                settings.sub2api_group_ids_text = serverSettings.sub2api_group_ids.join(',')
+                restoreSettingsFromServer()
                 showError('任务运行中，请先停止后再修改设置')
                 return
             }
@@ -443,10 +460,14 @@ const app = createApp({
             settingsSaving.value = true
             try {
                 const groupIds = parseGroupIdsInput(settings.sub2api_group_ids_text)
+                const proxyHost = String(settings.proxy_host || '').trim()
+                const proxyPort = parseProxyPortInput(settings.proxy_port_text)
                 const payload = {
-                    plus_auto_activate_enabled: Boolean(settings.plus_auto_activate_enabled),
                     sub2api_auto_upload_enabled: Boolean(settings.sub2api_auto_upload_enabled),
-                    sub2api_group_ids: groupIds.length ? groupIds : [...serverSettings.sub2api_group_ids]
+                    sub2api_group_ids: groupIds.length ? groupIds : [...serverSettings.sub2api_group_ids],
+                    proxy_enabled: Boolean(settings.proxy_enabled),
+                    proxy_host: proxyHost,
+                    proxy_port: proxyPort
                 }
                 const data = await requestJson('/api/settings', {
                     method: 'POST',
@@ -454,13 +475,10 @@ const app = createApp({
                     body: JSON.stringify(payload)
                 })
                 syncSettings(data)
-                settings.sub2api_group_ids_text = serverSettings.sub2api_group_ids.join(',')
+                restoreSettingsFromServer()
                 showSuccess('设置已保存')
             } catch (error) {
-                settings.plus_auto_activate_enabled = serverSettings.plus_auto_activate_enabled
-                settings.sub2api_auto_upload_enabled = serverSettings.sub2api_auto_upload_enabled
-                settings.sub2api_group_ids = [...serverSettings.sub2api_group_ids]
-                settings.sub2api_group_ids_text = serverSettings.sub2api_group_ids.join(',')
+                restoreSettingsFromServer()
                 showError(error.message)
             } finally {
                 settingsSaving.value = false
@@ -513,10 +531,10 @@ const app = createApp({
                     page: String(accountPagination.current),
                     page_size: String(accountPagination.pageSize),
                     keyword: String(accountFilters.keyword || '').trim(),
-                    registration_status: accountFilters.registration === 'all' ? '' : accountFilters.registration,
-                    overall_status: accountFilters.overall === 'all' ? '' : accountFilters.overall,
-                    plus_status: accountFilters.plus === 'all' ? '' : accountFilters.plus,
+                    account_category: accountFilters.category === 'all' ? '' : accountFilters.category,
+                    login_status: accountFilters.login === 'all' ? '' : accountFilters.login,
                     sub2api_status: accountFilters.sub2api === 'all' ? '' : accountFilters.sub2api,
+                    team_manage_status: accountFilters.teamManage === 'all' ? '' : accountFilters.teamManage,
                 })
                 const data = await requestJson(`/api/accounts?${query.toString()}`)
                 accounts.value = Array.isArray(data && data.items) ? data.items : []
@@ -526,10 +544,6 @@ const app = createApp({
                     accountPagination.current = accountPagination.totalPages
                     return
                 }
-                if (!isActivationPipelineBusy()) {
-                    lastActivationRefreshAt.value = Date.now()
-                    void refreshPendingActivationStatuses(true)
-                }
             } catch (error) {
                 showError(error.message)
                 accounts.value = []
@@ -538,27 +552,6 @@ const app = createApp({
             } finally {
                 accountsLoading.value = false
             }
-        }
-
-        /**
-         * 判断指定账号是否需要继续刷新激活状态。
-         *
-         * @author AI by zb
-         */
-        function shouldRefreshActivationStatus(record) {
-            const requestId = String(record && record.plusRequestId || '').trim()
-            const plusState = String(record && record.plusState || '').trim().toLowerCase()
-            const plusStatus = String(record && record.plusStatus || '').trim()
-
-            if (!record || !record.email || !requestId) {
-                return false
-            }
-            return (
-                plusState === 'pending'
-                || plusStatus.includes('处理中')
-                || plusStatus.includes('取消中')
-                || plusStatus.includes('已提交')
-            )
         }
 
         /**
@@ -582,65 +575,18 @@ const app = createApp({
         }
 
         /**
-         * 按 requestId 刷新单个账号的激活状态。
-         *
-         * @author AI by zb
-         */
-        async function refreshActivationStatus(record, silent = true) {
-            if (!shouldRefreshActivationStatus(record)) {
-                return
-            }
-
-            const email = String(record && record.email || '').trim()
-            const actionKey = buildActionKey('/api/accounts/refresh-activation', email)
-            if (accountActionLoading[actionKey]) {
-                return
-            }
-
-            accountActionLoading[actionKey] = true
-            try {
-                const data = await requestJson('/api/accounts/refresh-activation', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email })
-                })
-                if (data && data.account) {
-                    mergeAccountRecord(data.account)
-                }
-            } catch (error) {
-                if (!silent) {
-                    showError(`${email}\n${error.message}`)
-                }
-            } finally {
-                accountActionLoading[actionKey] = false
-            }
-        }
-
-        /**
-         * 批量刷新当前列表中处于处理中状态的激活任务。
-         *
-         * @author AI by zb
-         */
-        async function refreshPendingActivationStatuses(silent = true) {
-            const pendingRecords = accounts.value.filter((record) => shouldRefreshActivationStatus(record))
-            for (const record of pendingRecords) {
-                await refreshActivationStatus(record, silent)
-            }
-        }
-
-        /**
-         * 重置手动新增账号表单。
+         * 重置导入账号表单。
          *
          * @author AI by zb
          */
         function resetManualAccountForm() {
             manualAccountForm.email = ''
             manualAccountForm.password = ''
-            manualAccountForm.accessToken = ''
+            manualAccountForm.accountCategory = 'normal'
         }
 
         /**
-         * 关闭手动新增账号面板并清空输入。
+         * 关闭导入账号面板并清空输入。
          *
          * @author AI by zb
          */
@@ -650,7 +596,7 @@ const app = createApp({
         }
 
         /**
-         * 切换手动新增账号面板显示状态。
+         * 切换导入账号面板显示状态。
          *
          * @author AI by zb
          */
@@ -663,33 +609,33 @@ const app = createApp({
         }
 
         /**
-         * 提交手动新增账号请求。
+         * 提交导入账号请求。
          *
          * @author AI by zb
          */
         async function submitManualAccount() {
             const email = String(manualAccountForm.email || '').trim().toLowerCase()
             const password = String(manualAccountForm.password || '').trim()
-            const accessToken = String(manualAccountForm.accessToken || '').trim()
+            const accountCategory = String(manualAccountForm.accountCategory || 'normal').trim()
 
             if (!email) {
                 showError('请输入账号邮箱')
                 return
             }
-            if (!password && !accessToken) {
-                showError('密码和 accessToken 至少填写一项')
+            if (!password) {
+                showError('请输入账号密码')
                 return
             }
 
             manualAccountSubmitting.value = true
             try {
-                const data = await requestJson('/api/accounts/create', {
+                const data = await requestJson('/api/accounts/import', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email, password, accessToken })
+                    body: JSON.stringify({ email, password, account_category: accountCategory })
                 })
 
-                showSuccess(data && data.message ? data.message : '账号已添加')
+                showSuccess(data && data.message ? data.message : '账号已导入')
                 closeManualAccountPanel()
                 if (accountPagination.current !== 1) {
                     accountPagination.current = 1
@@ -717,63 +663,21 @@ const app = createApp({
                 return false
             }
             return [
-                '/api/accounts/deliver',
-                '/api/accounts/access-token',
-                '/api/accounts/update-status',
-                '/api/accounts/retry-registration',
-                '/api/accounts/retry-plus',
-                '/api/accounts/retry-team',
-                '/api/accounts/cancel-activation',
+                '/api/accounts/login-sub2api',
                 '/api/accounts/upload-sub2api',
+                '/api/accounts/upload-team-manage',
                 '/api/accounts/delete'
             ].some((url) => isAccountActionRunning(url, email))
-        }
-
-        function isActivationRetryRunning(record) {
-            const email = record && record.email ? record.email : ''
-            if (!email) {
-                return false
-            }
-            return (
-                isAccountActionRunning('/api/accounts/retry-plus', email)
-                || isAccountActionRunning('/api/accounts/retry-team', email)
-            )
-        }
-
-        function isActivationCurrentAction(record) {
-            const email = String(record && record.email || '').trim().toLowerCase()
-            const action = String(currentAction.value || '').trim().toLowerCase()
-            if (!email || !action || !action.includes(email)) {
-                return false
-            }
-            const actionLabel = action.split(':', 1)[0].split('：', 1)[0]
-            return (
-                actionLabel.includes('plus')
-                || actionLabel.includes('team')
-                || actionLabel.includes('激活')
-            )
-        }
-
-        function shouldShowCancelActivation(record) {
-            return Boolean(
-                record
-                && record.email
-                && (isActivationRetryRunning(record) || isActivationCurrentAction(record))
-            )
         }
 
         function hasAccountActions(record) {
             return Boolean(
                 record
                 && (
-                    record.canDeliver
-                    || record.canEditStatus
+                    record.canLoginSub2api
                     || record.canDeleteAccount
-                    || record.canCopyAccessToken
-                    || record.canRetryRegistration
-                    || record.canRetryPlus
-                    || record.canRetryTeam
-                    || record.canUploadSub2api
+                    || record.canUploadExistingToken
+                    || record.canUploadTeamManage
                 )
             )
         }
@@ -835,66 +739,135 @@ const app = createApp({
             await runAccountAction('/api/accounts/upload-sub2api', record.email)
         }
 
-        async function handleDeliverAccount(record) {
+        async function handleUploadTeamManage(record) {
             if (!record || !record.email) {
                 return
             }
-
-            const vendor = String(deliverySettings.vendor || '').trim() || '咸鱼'
-            const deliveryEmail = String(record.email || '').trim().toLowerCase()
-
-            const confirmed = window.confirm(`${record.email}\n将向 ${deliveryEmail} 发货，厂家标记为 ${vendor}，确认继续吗？`)
-            if (!confirmed) {
-                return
-            }
-
-            persistDeliverySettings()
-            const data = await runAccountAction('/api/accounts/deliver', record.email, { vendor })
-            if (data && data.tempAccessUrl) {
-                const openedWindow = window.open(data.tempAccessUrl, '_blank', 'noopener')
-                if (!openedWindow) {
-                    showError('发货已完成，但浏览器拦截了临时链接弹窗，请允许弹窗后重试')
+            if (record.teamManageUploaded) {
+                const confirmed = window.confirm(`${record.email}\n该母号已经上传过 Team 管理，确认重新上传吗？`)
+                if (!confirmed) {
+                    return
                 }
             }
+            await runAccountAction('/api/accounts/upload-team-manage', record.email)
         }
 
-        async function handleCopyAccessToken(record) {
+        /**
+         * 根据账号类型重置登录上传弹窗默认值。
+         *
+         * @author AI by zb
+         */
+        function resetLoginUploadForm(record = null) {
+            loginUploadForm.otpMode = record && record.isMotherAccount ? 'manual' : 'auto'
+            loginUploadForm.uploadTargets = record && record.isMotherAccount
+                ? ['sub2api', 'team_manage']
+                : ['sub2api']
+            loginUploadForm.otpCode = ''
+        }
+
+        /**
+         * 打开单账号登录上传弹窗。
+         *
+         * @author AI by zb
+         */
+        function openLoginUploadModal(record) {
             if (!record || !record.email) {
                 return
             }
+            loginUploadRecord.value = record
+            resetLoginUploadForm(record)
+            loginUploadModalOpen.value = true
+        }
 
-            const actionKey = buildActionKey('/api/accounts/access-token', record.email)
-            accountActionLoading[actionKey] = true
+        /**
+         * 关闭单账号登录上传弹窗。
+         *
+         * @author AI by zb
+         */
+        function closeLoginUploadModal() {
+            if (loginUploadSubmitting.value) {
+                return
+            }
+            loginUploadModalOpen.value = false
+            loginUploadRecord.value = null
+            resetLoginUploadForm()
+        }
 
+        /**
+         * 提交单账号登录上传请求。
+         *
+         * @author AI by zb
+         */
+        async function submitLoginUpload() {
+            const record = loginUploadRecord.value
+            if (!record || !record.email) {
+                return
+            }
+            const targets = Array.isArray(loginUploadForm.uploadTargets)
+                ? loginUploadForm.uploadTargets
+                : []
+            if (!targets.length) {
+                showError('请选择至少一个上传目标')
+                return
+            }
+
+            loginUploadSubmitting.value = true
             try {
-                const data = await requestJson('/api/accounts/access-token', {
+                const data = await runAccountAction('/api/accounts/login-sub2api', record.email, {
+                    otp_mode: loginUploadForm.otpMode,
+                    upload_targets: targets
+                })
+                if (data && data.success !== false) {
+                    loginUploadModalOpen.value = false
+                    loginUploadRecord.value = null
+                    resetLoginUploadForm()
+                }
+            } finally {
+                loginUploadSubmitting.value = false
+            }
+        }
+
+        /**
+         * 提交手填登录验证码。
+         *
+         * @author AI by zb
+         */
+        async function submitLoginOtp() {
+            const record = loginUploadRecord.value
+            const code = String(loginUploadForm.otpCode || '').trim()
+            if (!record || !record.email) {
+                return
+            }
+            if (!/^\d{6}$/.test(code)) {
+                showError('请输入 6 位验证码')
+                return
+            }
+
+            loginOtpSubmitting.value = true
+            try {
+                const data = await requestJson('/api/accounts/login-otp', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email: record.email })
+                    body: JSON.stringify({ email: record.email, code })
                 })
-                await copyText(data && data.accessToken ? data.accessToken : '', 'accessToken')
+                showSuccess(data && data.message ? data.message : '验证码已提交')
+                loginUploadForm.otpCode = ''
             } catch (error) {
-                showError(`${record.email}\n${error.message}`)
+                showError(error.message)
             } finally {
-                accountActionLoading[actionKey] = false
+                loginOtpSubmitting.value = false
             }
         }
 
-        async function handleEditAccountStatus(record) {
+        async function handleLoginSub2Api(record) {
             if (!record || !record.email) {
                 return
             }
-            const currentStatus = String(getPrimaryStatusLabel(record) || record.status || '').trim()
-            const nextStatus = window.prompt(`${record.email}\n请输入新的账号状态`, currentStatus)
-            if (nextStatus === null) {
+            if (isRunning.value) {
+                showError('任务运行中，请稍后再试')
                 return
             }
-            const normalizedStatus = String(nextStatus || '').trim()
-            if (!normalizedStatus) {
-                showError('状态不能为空')
-                return
-            }
-            await runAccountAction('/api/accounts/update-status', record.email, { status: normalizedStatus })
+            openLoginUploadModal(record)
         }
 
         async function handleDeleteAccount(record) {
@@ -908,49 +881,22 @@ const app = createApp({
             await runAccountAction('/api/accounts/delete', record.email)
         }
 
-        async function handleCancelActivation(record) {
-            if (!record || !record.email) {
-                return
-            }
-            const confirmed = window.confirm(`${record.email}\n确认取消当前 Plus / Team 激活任务吗？`)
-            if (!confirmed) {
-                return
-            }
-            await runAccountAction('/api/accounts/cancel-activation', record.email)
-        }
-
         async function handleAccountActionMenu(actionKey, record) {
             if (!record || !record.email) {
                 return
             }
             setActionPopoverOpen(record, false)
 
-            if (actionKey === 'editStatus') {
-                await handleEditAccountStatus(record)
-                return
-            }
-            if (actionKey === 'retryRegistration') {
-                await runAccountAction('/api/accounts/retry-registration', record.email)
-                return
-            }
-            if (actionKey === 'copyAccessToken') {
-                await handleCopyAccessToken(record)
-                return
-            }
-            if (actionKey === 'deliver') {
-                await handleDeliverAccount(record)
-                return
-            }
-            if (actionKey === 'retryPlus') {
-                await runAccountAction('/api/accounts/retry-plus', record.email)
-                return
-            }
-            if (actionKey === 'retryTeam') {
-                await runAccountAction('/api/accounts/retry-team', record.email)
+            if (actionKey === 'loginSub2Api') {
+                await handleLoginSub2Api(record)
                 return
             }
             if (actionKey === 'uploadSub2Api') {
                 await handleUploadSub2Api(record)
+                return
+            }
+            if (actionKey === 'uploadTeamManage') {
+                await handleUploadTeamManage(record)
                 return
             }
             if (actionKey === 'deleteAccount') {
@@ -984,10 +930,10 @@ const app = createApp({
             return 'default'
         }
 
-        function getPlusTagColor(record) {
-            const kind = classifyPlusStatus(record)
+        function getSub2ApiTagColor(record) {
+            const kind = classifySub2ApiStatus(record)
             if (kind === 'success') {
-                return 'green'
+                return 'cyan'
             }
             if (kind === 'failed') {
                 return 'red'
@@ -995,13 +941,13 @@ const app = createApp({
             if (kind === 'disabled') {
                 return 'default'
             }
-            return 'blue'
+            return 'gold'
         }
 
-        function getSub2ApiTagColor(record) {
-            const kind = classifySub2ApiStatus(record)
+        function getTeamManageTagColor(record) {
+            const kind = classifyTeamManageStatus(record)
             if (kind === 'success') {
-                return 'cyan'
+                return 'purple'
             }
             if (kind === 'failed') {
                 return 'red'
@@ -1020,71 +966,83 @@ const app = createApp({
             return normalizeReasonText(record && record.lastError)
         }
 
-        function getPlusReason(record) {
-            return normalizeReasonText(record && record.plusMessage)
+        function getLoginTagColor(record) {
+            const kind = classifyLoginStatus(record)
+            if (kind === 'success') {
+                return 'green'
+            }
+            if (kind === 'failed') {
+                return 'red'
+            }
+            if (kind === 'disabled') {
+                return 'default'
+            }
+            return 'blue'
+        }
+
+        function getLoginReason(record) {
+            return normalizeReasonText(record && (record.loginMessage || record.lastError))
+        }
+
+        function getLoginStatusTone(record) {
+            return resolveStatusTone(classifyLoginStatus(record))
         }
 
         function getSub2ApiReason(record) {
             return normalizeReasonText(record && record.sub2apiMessage)
         }
 
-        function getOverallStatusTone(record) {
-            return resolveStatusTone(classifyOverallStatus(record))
+        function getTeamManageReason(record) {
+            return normalizeReasonText(record && record.teamManageMessage)
         }
 
-        function getPlusStatusTone(record) {
-            return resolveStatusTone(classifyPlusStatus(record))
+        function getOverallStatusTone(record) {
+            return resolveStatusTone(classifyOverallStatus(record))
         }
 
         function getSub2ApiStatusTone(record) {
             return resolveStatusTone(classifySub2ApiStatus(record))
         }
 
+        function getTeamManageStatusTone(record) {
+            return resolveStatusTone(classifyTeamManageStatus(record))
+        }
+
         function getStatusTooltipClass(tone) {
             return `status-tooltip status-tooltip-${tone || 'info'}`
         }
 
-        function shouldUsePrimaryPlusStatus(record) {
-            return classifyPlusStatus(record) !== 'idle'
-        }
-
         function getPrimaryStatusLabel(record) {
-            if (shouldUsePrimaryPlusStatus(record)) {
-                return record && record.plusStatus
-                    ? record.plusStatus
-                    : (record && record.plusCalled ? '失败' : '未调用')
+            const kind = classifyLoginStatus(record)
+            if (record && record.loginMessage && kind === 'failed') {
+                return '登录失败'
             }
-            return (record && record.status) || '待处理'
+            if (kind === 'success') {
+                return '登录成功'
+            }
+            if (kind === 'failed') {
+                return '登录失败'
+            }
+            if (kind === 'disabled') {
+                return '已跳过'
+            }
+            return '待验证'
         }
 
         function getPrimaryStatusReason(record) {
-            if (shouldUsePrimaryPlusStatus(record)) {
-                return getPlusReason(record) || getOverallReason(record)
-            }
-            return getOverallReason(record)
+            return getLoginReason(record)
         }
 
         function getPrimaryStatusTone(record) {
-            return shouldUsePrimaryPlusStatus(record)
-                ? getPlusStatusTone(record)
-                : getOverallStatusTone(record)
+            return getLoginStatusTone(record)
         }
 
         function getPrimaryTagColor(record) {
-            return shouldUsePrimaryPlusStatus(record)
-                ? getPlusTagColor(record)
-                : getOverallTagColor(record)
+            return getLoginTagColor(record)
         }
 
         watch(
-            () => [deliverySettings.vendor],
-            () => {
-                persistDeliverySettings()
-            }
-        )
-
-        watch(
-            () => [accountFilters.keyword, accountFilters.registration, accountFilters.overall, accountFilters.plus, accountFilters.sub2api],
+            () => [accountFilters.keyword, accountFilters.category, accountFilters.login, accountFilters.sub2api, accountFilters.teamManage],
             () => {
                 if (currentTab.value !== 'accounts') {
                     return
@@ -1137,11 +1095,11 @@ const app = createApp({
             accounts,
             accountsLoading,
             clearLogs,
+            closeLoginUploadModal,
             currentAction,
             currentTab,
             copyText,
             closeManualAccountPanel,
-            deliverySettings,
             failCount,
             getAccountRowKey,
             getActionPopoverKey,
@@ -1155,30 +1113,36 @@ const app = createApp({
             getPrimaryStatusReason,
             getPrimaryStatusTone,
             getPrimaryTagColor,
-            getPlusTagColor,
-            getPlusReason,
-            getPlusStatusTone,
+            getLoginTagColor,
+            getLoginReason,
+            getLoginStatusTone,
             getStatusTooltipClass,
             getSub2ApiTagColor,
             getSub2ApiReason,
             getSub2ApiStatusTone,
+            getTeamManageTagColor,
+            getTeamManageReason,
+            getTeamManageStatusTone,
             handleMenuClick,
             handleAccountActionMenu,
-            handleCancelActivation,
-            handleCopyAccessToken,
             handleDeleteAccount,
-            handleEditAccountStatus,
             handleGroupIdsBlur,
+            handleLoginSub2Api,
             handleUploadSub2Api,
+            handleUploadTeamManage,
             hasAccountActions,
             groupIdsInputFocused,
             isActionPopoverOpen,
             isAnyAccountActionRunning,
             isAccountActionRunning,
-            shouldShowCancelActivation,
             isRunning,
             lastUpdate,
             loadAccounts,
+            loginOtpSubmitting,
+            loginUploadForm,
+            loginUploadModalOpen,
+            loginUploadRecord,
+            loginUploadSubmitting,
             logContainerRef,
             logs,
             manualAccountForm,
@@ -1199,6 +1163,8 @@ const app = createApp({
             showManualAccountPanel,
             startTask,
             stopTask,
+            submitLoginOtp,
+            submitLoginUpload,
             submitManualAccount,
             successCount,
             targetCount,

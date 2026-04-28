@@ -1,19 +1,21 @@
 # ==========================================
-# ChatGPT 自动注册工具 - 配置文件模板
+# 账号登录验证与 Sub2Api 上传工具 - 配置文件模板
 # 使用说明:
 # 1. 复制此文件为 config.yaml
 # 2. 修改 config.yaml 中的配置
 # ==========================================
 
-# 注册配置
+# 批量处理配置
 registration:
-  total_accounts: 1      # 批量注册的账号数量
-  min_age: 20            # 随机生日的最小年龄
-  max_age: 40            # 随机生日的最大年龄
+  total_accounts: 1      # 默认批量处理账号数量
+  min_age: 20            # 历史注册模块保留字段
+  max_age: 40            # 历史注册模块保留字段
 
-# 临时邮箱服务 (Cloudflare Temp Email)
-# 部署教程: https://github.com/dreamhunter2333/cloudflare_temp_email
+# 邮箱服务
 email:
+  # provider 可选：worker / outlook
+  provider: "worker"
+
   # Cloudflare Worker 地址 (必须修改)
   worker_url: "https://your-worker-name.your-subdomain.workers.dev"
 
@@ -30,13 +32,25 @@ email:
   # Worker 的访问密码 (必须修改)
   admin_password: "your-worker-admin-password"
 
+# Outlook Mail Station 开放接口配置
+outlook:
+  base_url: "https://your-outlook-mail-station-domain"
+  api_key: "your_outlook_open_api_key"
+  auth_type: "api_key"    # api_key 或 bearer
+  site_code: "OPENAI"
+  batch_code: ""
+  domain: "outlook.com"
+  refresh: true
+  wait_timeout: 120
+  poll_interval: 3
+
 # 浏览器自动化配置
 browser:
   max_wait_time: 600    # 全局最大等待时间
   short_wait_time: 120  # 短任务等待时间
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
   show_browser_window: true   # 是否显示浏览器窗口；稳定预览建议开启
-  keep_browser_open_after_registration: true   # 仅当前轮注册成功后暂时保留；若还有下一轮，会在等待下一轮前先关闭
+  keep_browser_open_after_registration: true   # 历史注册模块保留字段
 
 # 账号密码规则
 password:
@@ -50,9 +64,15 @@ retry:
   http_timeout: 30          # HTTP 请求超时时间
   error_page_max_retries: 5 # 遇到错误页面的最大刷新重试次数
   button_click_max_retries: 3 # 按钮点击最大重试次数
-  manual_activation_attempts: 3 # 点击“重试 Plus / 激活 Team”时的最大重试轮数
+  manual_activation_attempts: 3 # 历史激活模块保留字段
 
-# 批量注册间隔
+# 代理配置；开启后，登录、邮箱接口与 Sub2Api 上传均走该代理
+proxy:
+  enabled: false
+  host: "127.0.0.1"
+  port: 7890
+
+# 批量处理间隔
 batch:
   interval_min: 5  # 最小间隔(秒)
   interval_max: 15 # 最大间隔(秒)
@@ -69,11 +89,11 @@ payment:
 
 # 文件路径配置
 files:
-  accounts_file: "registered_accounts.txt"  # 注册成功账号的保存路径
+  accounts_file: "registered_accounts.txt"  # 历史 TXT 账号路径
   accounts_db_file: "data/accounts.db"      # 本地账号数据库路径
 
 # ------------------------------------------------------------
-# Plus 绑定模式
+# Plus 绑定模式（历史遗留配置，本轮主流程不再使用）
 # 可选:
 #   - activation_api: 提取 accessToken 后调用激活接口
 #   - legacy_browser: 使用旧版浏览器自动化绑定 Plus
@@ -83,7 +103,7 @@ plus:
   auto_activate: true
 
 # ------------------------------------------------------------
-# Plus 激活接口配置
+# Plus 激活接口配置（历史遗留配置，本轮主流程不再使用）
 # ------------------------------------------------------------
 activation_api:
   base_url: ["https://bot.joini.cloud", "http://127.0.0.1:8000"]  # 可配置多个地址，启动时可用 --api 选择索引
@@ -102,3 +122,10 @@ sub2api:
   password: "your-sub2api-admin-password"
   auto_upload_sub2api: true
   group_ids: [2]
+
+# ------------------------------------------------------------
+# Team 管理导入配置
+# ------------------------------------------------------------
+team_manage:
+  base_url: "https://team.joini.cloud"
+  api_key: ""

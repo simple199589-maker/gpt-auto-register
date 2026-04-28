@@ -29,6 +29,7 @@ from app.email_service import (
     create_temp_email,
     fetch_emails,
     fetch_valid_emails,
+    set_email_provider_override,
 )
 from app.utils import extract_verification_code
 
@@ -45,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     create_parser = subparsers.add_parser("create", help="创建一个新的临时邮箱并等待验证码")
+    create_parser.add_argument("--provider", choices=["worker", "outlook"], default="", help="邮箱 provider 覆盖")
     create_parser.add_argument(
         "--timeout",
         type=int,
@@ -53,6 +55,7 @@ def parse_args() -> argparse.Namespace:
     )
 
     fetch_parser = subparsers.add_parser("fetch", help="拉取指定邮箱的有效邮件")
+    fetch_parser.add_argument("--provider", choices=["worker", "outlook"], default="", help="邮箱 provider 覆盖")
     fetch_parser.add_argument("--token", help="create 返回的兼容令牌")
     fetch_parser.add_argument("--email", help="直接传邮箱地址，脚本会自动转换为兼容令牌")
     fetch_parser.add_argument(
@@ -360,6 +363,7 @@ def handle_fetch(args: argparse.Namespace) -> Dict[str, Any]:
 #  */
 def main() -> int:
     args = parse_args()
+    set_email_provider_override(str(getattr(args, "provider", "") or ""))
 
     if args.command == "create":
         result = handle_create(args)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-手动 OTP 的 Codex 登录示例。
+Codex 登录手工验证脚本。
 AI by zb
 """
 
@@ -36,11 +36,12 @@ def parse_args() -> argparse.Namespace:
         argparse.Namespace: 解析后的参数对象
         AI by zb
     """
-    parser = argparse.ArgumentParser(description="Codex 手工 OTP 登录脚本")
+    parser = argparse.ArgumentParser(description="Codex 登录手工验证脚本")
     parser.add_argument("--email", default=TEST_EMAIL, help="登录邮箱")
     parser.add_argument("--password", default=TEST_PASSWORD, help="登录密码")
     parser.add_argument("--config", default="", help="配置文件路径")
     parser.add_argument("--proxy", default="", help="代理地址")
+    parser.add_argument("--otp-mode", choices=["auto", "manual"], default="manual", help="OTP 模式")
     parser.add_argument("--output-dir", default="", help="token 输出目录")
     parser.add_argument("--skip-upload", action="store_true", help="不上传到 Sub2Api")
     parser.add_argument("--skip-save", action="store_true", help="不保存本地 token")
@@ -61,7 +62,7 @@ def main() -> int:
         password=str(args.password),
         config_path=str(args.config or ""),
         proxy=str(args.proxy or ""),
-        otp_mode="manual",
+        otp_mode=str(args.otp_mode or "manual"),
         upload=not bool(args.skip_upload),
         save_local=not bool(args.skip_save),
         output_dir=str(args.output_dir or ""),

@@ -43,6 +43,7 @@ class RegistrationConfig:
 @dataclass
 class EmailConfig:
     """邮箱服务配置"""
+    provider: str = "worker"
     worker_url: str = ""
     domain: str = ""
     domain_index: list[int] = field(default_factory=list)
@@ -53,6 +54,20 @@ class EmailConfig:
 
 
 @dataclass
+class OutlookConfig:
+    """Outlook 邮箱服务配置"""
+    base_url: str = ""
+    api_key: str = ""
+    auth_type: str = "api_key"
+    site_code: str = "OPENAI"
+    batch_code: str = ""
+    domain: str = "outlook.com"
+    refresh: bool = True
+    wait_timeout: int = 120
+    poll_interval: int = 3
+
+
+@dataclass
 class BrowserConfig:
     """浏览器配置"""
     max_wait_time: int = 600
@@ -60,6 +75,14 @@ class BrowserConfig:
     user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     show_browser_window: bool = True
     keep_browser_open_after_registration: bool = True
+
+
+@dataclass
+class ProxyConfig:
+    """代理配置"""
+    enabled: bool = False
+    host: str = ""
+    port: int = 0
 
 
 def _parse_bool(value: Any, default: bool) -> bool:
@@ -104,6 +127,24 @@ def _parse_positive_int(value: Any, default: int, minimum: int = 1) -> int:
     except (TypeError, ValueError):
         return fallback
     return max(normalized, int(minimum))
+
+
+def _parse_proxy_port(value: Any, default: int = 0) -> int:
+    """
+    将代理端口解析为有效端口。
+
+    参数:
+        value: 原始端口值
+        default: 默认端口
+    返回:
+        int: 端口，0 表示未配置
+        AI by zb
+    """
+    try:
+        port = int(str(value or "").strip())
+    except (TypeError, ValueError):
+        return int(default or 0)
+    return port if 0 <= port <= 65535 else int(default or 0)
 
 
 def _parse_group_ids(value: Any, default: list[int]) -> list[int]:
@@ -262,11 +303,21 @@ class Sub2ApiAppConfig:
 
 
 @dataclass
+class TeamManageConfig:
+    """Team 管理导入配置。AI by zb"""
+
+    base_url: str = "https://team.joini.cloud"
+    api_key: str = ""
+
+
+@dataclass
 class AppConfig:
     """应用程序完整配置"""
     registration: RegistrationConfig = field(default_factory=RegistrationConfig)
     email: EmailConfig = field(default_factory=EmailConfig)
+    outlook: OutlookConfig = field(default_factory=OutlookConfig)
     browser: BrowserConfig = field(default_factory=BrowserConfig)
+    proxy: ProxyConfig = field(default_factory=ProxyConfig)
     password: PasswordConfig = field(default_factory=PasswordConfig)
     retry: RetryConfig = field(default_factory=RetryConfig)
     batch: BatchConfig = field(default_factory=BatchConfig)
@@ -275,6 +326,7 @@ class AppConfig:
     plus: PlusConfig = field(default_factory=PlusConfig)
     activation_api: ActivationApiConfig = field(default_factory=ActivationApiConfig)
     sub2api: Sub2ApiAppConfig = field(default_factory=Sub2ApiAppConfig)
+    team_manage: TeamManageConfig = field(default_factory=TeamManageConfig)
 
 
 # ==============================================================
@@ -353,6 +405,72 @@ class ConfigLoader:
         text = str(content or "")
         line_ending = "\r\n" if "\r\n" in text else "\n"
         value_text = "true" if value else "false"
+        lines = text.splitlines(keepends=True)
+
+        def replace_key_line(line: str) -> Optional[str]:
+            raw_line = line.rstrip("\r\n")
+            newline = line[len(raw_line):]
+            body = raw_line
+            comment = ""
+            comment_index = raw_line.find("#")
+            if comment_index != -1:
+                body = raw_line[:comment_index].rstrip()
+                trailing_comment = raw_line[comment_index:].strip()
+                comment = f" {trailing_comment}" if trailing_comment else ""
+            match = re.match(rf"^(\s+{re.escape(key)}\s*:\s*).*$", body)
+            if not match:
+                return None
+            return f"{match.group(1)}{value_text}{comment}{newline}"
+
+        section_index = -1
+        for index, line in enumerate(lines):
+            if re.match(rf"^{re.escape(section)}\s*:\s*(#.*)?$", line.strip()):
+                section_index = index
+                break
+
+        if section_index != -1:
+            section_end = len(lines)
+            for index in range(section_index + 1, len(lines)):
+                current_line = lines[index]
+                stripped = current_line.strip()
+                if not stripped:
+                    continue
+                if current_line.startswith((" ", "\t")):
+                    continue
+                section_end = index
+                break
+
+            for index in range(section_index + 1, section_end):
+                replaced_line = replace_key_line(lines[index])
+                if replaced_line is not None:
+                    lines[index] = replaced_line
+                    return "".join(lines)
+
+            lines.insert(section_end, f"  {key}: {value_text}{line_ending}")
+            return "".join(lines)
+
+        if text and not text.endswith(("\r", "\n")):
+            text += line_ending
+        if text and not text.endswith(f"{line_ending}{line_ending}"):
+            text += line_ending
+        text += f"{section}:{line_ending}  {key}: {value_text}{line_ending}"
+        return text
+
+    def _upsert_section_scalar_value(self, content: str, section: str, key: str, value_text: str) -> str:
+        """
+        在 YAML 文本中更新或插入指定标量配置，尽量保留原始结构与注释。
+
+        参数:
+            content: 原始 YAML 文本
+            section: 顶层分组名称
+            key: 分组内键名
+            value_text: 已格式化的 YAML 标量文本
+        返回:
+            str: 更新后的 YAML 文本
+            AI by zb
+        """
+        text = str(content or "")
+        line_ending = "\r\n" if "\r\n" in text else "\n"
         lines = text.splitlines(keepends=True)
 
         def replace_key_line(line: str) -> Optional[str]:
@@ -516,6 +634,7 @@ class ConfigLoader:
         if 'email' in self.raw_config:
             email = self.raw_config['email']
             self.config.email = EmailConfig(
+                provider=str(email.get('provider', self.config.email.provider)).strip().lower() or "worker",
                 worker_url=email.get('worker_url', self.config.email.worker_url),
                 domain=email.get('domain', self.config.email.domain),
                 domain_index=_parse_non_negative_int_list(
@@ -526,6 +645,20 @@ class ConfigLoader:
                 wait_timeout=email.get('wait_timeout', self.config.email.wait_timeout),
                 poll_interval=email.get('poll_interval', self.config.email.poll_interval),
                 admin_password=email.get('admin_password', self.config.email.admin_password)
+            )
+
+        if 'outlook' in self.raw_config:
+            outlook = self.raw_config['outlook']
+            self.config.outlook = OutlookConfig(
+                base_url=str(outlook.get('base_url', self.config.outlook.base_url)).strip().rstrip('/'),
+                api_key=str(outlook.get('api_key', self.config.outlook.api_key)).strip(),
+                auth_type=str(outlook.get('auth_type', self.config.outlook.auth_type)).strip().lower() or "api_key",
+                site_code=str(outlook.get('site_code', self.config.outlook.site_code)).strip() or "OPENAI",
+                batch_code=str(outlook.get('batch_code', self.config.outlook.batch_code)).strip(),
+                domain=str(outlook.get('domain', self.config.outlook.domain)).strip(),
+                refresh=_parse_bool(outlook.get('refresh', self.config.outlook.refresh), self.config.outlook.refresh),
+                wait_timeout=_parse_positive_int(outlook.get('wait_timeout', self.config.outlook.wait_timeout), self.config.outlook.wait_timeout),
+                poll_interval=_parse_positive_int(outlook.get('poll_interval', self.config.outlook.poll_interval), self.config.outlook.poll_interval),
             )
         
         # 浏览器配置
@@ -546,6 +679,18 @@ class ConfigLoader:
                     ),
                     self.config.browser.keep_browser_open_after_registration,
                 ),
+            )
+
+        if 'proxy' in self.raw_config:
+            proxy = self.raw_config['proxy'] or {}
+            legacy_proxy = str(proxy.get('http') or proxy.get('https') or "").strip()
+            self.config.proxy = ProxyConfig(
+                enabled=_parse_bool(
+                    proxy.get('enabled', bool(legacy_proxy)),
+                    self.config.proxy.enabled,
+                ),
+                host=str(proxy.get('host', self.config.proxy.host)).strip(),
+                port=_parse_proxy_port(proxy.get('port', self.config.proxy.port), self.config.proxy.port),
             )
         
         # 密码配置
@@ -657,11 +802,23 @@ class ConfigLoader:
                 group_ids=group_ids or list(self.config.sub2api.group_ids or [2]),
             )
 
+        if 'team_manage' in self.raw_config:
+            team_manage = self.raw_config['team_manage'] or {}
+            self.config.team_manage = TeamManageConfig(
+                base_url=str(
+                    team_manage.get('base_url', self.config.team_manage.base_url)
+                ).strip().rstrip('/') or "https://team.joini.cloud",
+                api_key=str(team_manage.get('api_key', self.config.team_manage.api_key)).strip(),
+            )
+
     def update_automation_settings(
         self,
         plus_auto_activate: Optional[bool] = None,
         sub2api_auto_upload: Optional[bool] = None,
         sub2api_group_ids: Optional[list[int]] = None,
+        proxy_enabled: Optional[bool] = None,
+        proxy_host: Optional[str] = None,
+        proxy_port: Optional[int] = None,
     ) -> AppConfig:
         """
         更新自动流程开关并持久化到配置文件。
@@ -669,11 +826,21 @@ class ConfigLoader:
         参数:
             plus_auto_activate: Plus 自动激活开关
             sub2api_auto_upload: Sub2Api 自动上传开关
+            proxy_enabled: 代理开关
+            proxy_host: 代理 IP/主机
+            proxy_port: 代理端口
         返回:
             AppConfig: 更新后的配置对象
             AI by zb
         """
-        if plus_auto_activate is None and sub2api_auto_upload is None and sub2api_group_ids is None:
+        if (
+            plus_auto_activate is None
+            and sub2api_auto_upload is None
+            and sub2api_group_ids is None
+            and proxy_enabled is None
+            and proxy_host is None
+            and proxy_port is None
+        ):
             return self.config
 
         raw_config = dict(self.raw_config or {})
@@ -697,6 +864,16 @@ class ConfigLoader:
                 list(self.config.sub2api.group_ids or [2]),
             )
             raw_config["sub2api"] = sub2api_section
+
+        if proxy_enabled is not None or proxy_host is not None or proxy_port is not None:
+            proxy_section = dict(raw_config.get("proxy") or {})
+            if proxy_enabled is not None:
+                proxy_section["enabled"] = bool(proxy_enabled)
+            if proxy_host is not None:
+                proxy_section["host"] = str(proxy_host or "").strip()
+            if proxy_port is not None:
+                proxy_section["port"] = _parse_proxy_port(proxy_port, self.config.proxy.port)
+            raw_config["proxy"] = proxy_section
 
         if config_file.exists():
             updated_text = config_file.read_text(encoding="utf-8")
@@ -722,6 +899,28 @@ class ConfigLoader:
                     "sub2api",
                     "group_ids",
                     _parse_group_ids(sub2api_group_ids, list(self.config.sub2api.group_ids or [2])),
+                )
+            if proxy_enabled is not None:
+                updated_text = self._upsert_section_bool_value(
+                    updated_text,
+                    "proxy",
+                    "enabled",
+                    bool(proxy_enabled),
+                )
+            if proxy_host is not None:
+                escaped_host = str(proxy_host or "").strip().replace("\\", "\\\\").replace('"', '\\"')
+                updated_text = self._upsert_section_scalar_value(
+                    updated_text,
+                    "proxy",
+                    "host",
+                    f'"{escaped_host}"',
+                )
+            if proxy_port is not None:
+                updated_text = self._upsert_section_scalar_value(
+                    updated_text,
+                    "proxy",
+                    "port",
+                    str(_parse_proxy_port(proxy_port, self.config.proxy.port)),
                 )
         else:
             updated_text = yaml.safe_dump(raw_config, allow_unicode=True, sort_keys=False)
@@ -782,6 +981,7 @@ MIN_AGE = cfg.registration.min_age
 MAX_AGE = cfg.registration.max_age
 
 # 邮箱配置
+EMAIL_PROVIDER = cfg.email.provider
 EMAIL_WORKER_URL = cfg.email.worker_url
 EMAIL_DOMAIN = cfg.email.domain
 EMAIL_DOMAIN_INDEX = list(cfg.email.domain_index or [])
@@ -790,12 +990,28 @@ EMAIL_WAIT_TIMEOUT = cfg.email.wait_timeout
 EMAIL_POLL_INTERVAL = cfg.email.poll_interval
 EMAIL_ADMIN_PASSWORD = cfg.email.admin_password
 
+# Outlook 邮箱配置
+OUTLOOK_BASE_URL = cfg.outlook.base_url
+OUTLOOK_API_KEY = cfg.outlook.api_key
+OUTLOOK_AUTH_TYPE = cfg.outlook.auth_type
+OUTLOOK_SITE_CODE = cfg.outlook.site_code
+OUTLOOK_BATCH_CODE = cfg.outlook.batch_code
+OUTLOOK_DOMAIN = cfg.outlook.domain
+OUTLOOK_REFRESH = cfg.outlook.refresh
+OUTLOOK_WAIT_TIMEOUT = cfg.outlook.wait_timeout
+OUTLOOK_POLL_INTERVAL = cfg.outlook.poll_interval
+
 # 浏览器配置
 MAX_WAIT_TIME = cfg.browser.max_wait_time
 SHORT_WAIT_TIME = cfg.browser.short_wait_time
 USER_AGENT = cfg.browser.user_agent
 SHOW_BROWSER_WINDOW = cfg.browser.show_browser_window
 KEEP_BROWSER_OPEN_AFTER_REGISTRATION = cfg.browser.keep_browser_open_after_registration
+
+# 代理配置
+PROXY_ENABLED = cfg.proxy.enabled
+PROXY_HOST = cfg.proxy.host
+PROXY_PORT = cfg.proxy.port
 
 # 密码配置
 PASSWORD_LENGTH = cfg.password.length
@@ -827,6 +1043,10 @@ CREDIT_CARD_INFO = {
 # Plus 配置
 PLUS_MODE = cfg.plus.mode
 
+# Team 管理配置
+TEAM_MANAGE_BASE_URL = cfg.team_manage.base_url
+TEAM_MANAGE_API_KEY = cfg.team_manage.api_key
+
 
 # ==============================================================
 # 工具函数
@@ -846,6 +1066,9 @@ def update_automation_settings(
     plus_auto_activate: Optional[bool] = None,
     sub2api_auto_upload: Optional[bool] = None,
     sub2api_group_ids: Optional[list[int]] = None,
+    proxy_enabled: Optional[bool] = None,
+    proxy_host: Optional[str] = None,
+    proxy_port: Optional[int] = None,
 ) -> AppConfig:
     """
     更新自动流程开关配置。
@@ -853,6 +1076,9 @@ def update_automation_settings(
     参数:
         plus_auto_activate: Plus 自动激活开关
         sub2api_auto_upload: Sub2Api 自动上传开关
+        proxy_enabled: 代理开关
+        proxy_host: 代理 IP/主机
+        proxy_port: 代理端口
     返回:
         AppConfig: 更新后的配置对象
         AI by zb
@@ -862,6 +1088,9 @@ def update_automation_settings(
         plus_auto_activate=plus_auto_activate,
         sub2api_auto_upload=sub2api_auto_upload,
         sub2api_group_ids=sub2api_group_ids,
+        proxy_enabled=proxy_enabled,
+        proxy_host=proxy_host,
+        proxy_port=proxy_port,
     )
     return cfg
 
@@ -902,16 +1131,17 @@ def print_config_summary() -> None:
     print("\n" + "=" * 50)
     print("📋 当前配置摘要")
     print("=" * 50)
-    print(f"  注册账号数量: {cfg.registration.total_accounts}")
+    print(f"  批量处理数量: {cfg.registration.total_accounts}")
+    print(f"  邮箱服务分支: {cfg.email.provider}")
     print(f"  邮箱域名索引: {list(cfg.email.domain_index or [])}")
     print(f"  Worker URL: {cfg.email.worker_url[:30]}...")
+    print(f"  Outlook API: {cfg.outlook.base_url[:30]}...")
     print(f"  账号保存文件: {cfg.files.accounts_file}")
     print(f"  账号数据库: {cfg.files.accounts_db_file}")
     print(f"  批量间隔: {cfg.batch.interval_min}-{cfg.batch.interval_max}秒")
-    print(f"  注册完成后保留浏览器: {'开启' if cfg.browser.keep_browser_open_after_registration else '关闭'}")
-    print(f"  Plus 模式: {cfg.plus.mode}")
-    print(f"  Plus 自动激活: {'开启' if cfg.plus.auto_activate else '关闭'}")
+    print(f"  浏览器窗口: {'显示' if cfg.browser.show_browser_window else '隐藏'}")
     print(f"  Sub2Api 自动上传: {'开启' if cfg.sub2api.auto_upload_sub2api else '关闭'}")
+    print(f"  Team 管理域: {cfg.team_manage.base_url}")
     print("=" * 50 + "\n")
 
 

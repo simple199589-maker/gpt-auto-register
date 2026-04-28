@@ -269,6 +269,16 @@ body::after {
     border-radius: 12px !important;
 }
 
+.proxy-fields {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 92px;
+    gap: 8px;
+}
+
+.proxy-port-input.ant-input {
+    text-align: center;
+}
+
 .main-panel {
     min-width: 0;
     display: flex;
@@ -642,6 +652,55 @@ body::after {
     justify-content: flex-end;
     gap: 8px;
     margin-top: 14px;
+}
+
+.login-upload-modal {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.login-upload-account {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--line-soft);
+    border-radius: 12px;
+    background: rgba(246, 249, 255, 0.86);
+}
+
+.login-upload-email {
+    min-width: 0;
+    color: var(--text-main);
+    font-size: 13px;
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.login-upload-block {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.login-upload-block .ant-radio-wrapper,
+.login-upload-block .ant-checkbox-wrapper {
+    min-height: 32px;
+    align-items: center;
+}
+
+.login-otp-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 112px;
+    gap: 8px;
+}
+
+.login-otp-row .ant-input {
+    width: 100%;
 }
 
 .accounts-table .ant-table {
@@ -1177,6 +1236,10 @@ body::after {
     }
 
     .manual-account-form {
+        grid-template-columns: 1fr;
+    }
+
+    .login-otp-row {
         grid-template-columns: 1fr;
     }
 

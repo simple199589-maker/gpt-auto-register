@@ -18,8 +18,13 @@ from app.config import cfg
 ACCOUNT_RECORD_DEFAULTS = {
     "email": "",
     "password": "N/A",
+    "accountCategory": "normal",
     "time": "",
     "status": "",
+    "loginStatus": "pending",
+    "loginState": "pending",
+    "loginMessage": "",
+    "loginVerifiedAt": "",
     "accessToken": "",
     "mailboxContext": "",
     "sessionInfo": {},
@@ -34,6 +39,11 @@ ACCOUNT_RECORD_DEFAULTS = {
     "sub2apiMessage": "",
     "sub2apiUploadedAt": "",
     "sub2apiAutoUploadEnabled": False,
+    "teamManageUploaded": False,
+    "teamManageState": "pending",
+    "teamManageStatus": "",
+    "teamManageMessage": "",
+    "teamManageUploadedAt": "",
     "oauthTokens": {
         "access_token": "",
         "refresh_token": "",
@@ -61,9 +71,12 @@ ACCOUNT_RECORD_DEFAULTS = {
 }
 
 ALLOWED_REGISTRATION_STATES = {"pending", "success", "failed"}
+ALLOWED_LOGIN_STATES = {"pending", "success", "failed", "disabled"}
 ALLOWED_PLUS_STATES = {"idle", "pending", "success", "failed", "disabled"}
 ALLOWED_SUB2API_STATES = {"pending", "success", "failed", "disabled"}
-SCHEMA_VERSION = "2"
+ALLOWED_ACCOUNT_CATEGORIES = {"normal", "mother"}
+ALLOWED_TEAM_MANAGE_STATES = {"pending", "success", "failed", "disabled"}
+SCHEMA_VERSION = "4"
 
 _INIT_LOCK = threading.Lock()
 _INITIALIZED = False
@@ -185,6 +198,54 @@ def _safe_json_loads(payload: Any, default: Any) -> Any:
         return default
 
 
+def _normalize_account_category(value: Any) -> str:
+    """
+    规范化账号分类。
+
+    参数:
+        value: 原始分类
+    返回:
+        str: `normal/mother`
+        AI by zb
+    """
+    normalized = str(value or "").strip().lower()
+    aliases = {
+        "normal": "normal",
+        "普通": "normal",
+        "普号": "normal",
+        "mother": "mother",
+        "母号": "mother",
+        "team": "mother",
+    }
+    return aliases.get(normalized, "normal")
+
+
+def _infer_team_manage_state(normalized: dict, prefer_explicit: bool = False) -> str:
+    """
+    推断 Team 管理上传状态。
+
+    参数:
+        normalized: 标准化账号记录
+        prefer_explicit: 是否优先使用显式状态
+    返回:
+        str: `pending/success/failed/disabled`
+        AI by zb
+    """
+    explicit = str(normalized.get("teamManageState") or "").strip().lower()
+    if prefer_explicit and explicit in ALLOWED_TEAM_MANAGE_STATES:
+        return explicit
+
+    status_text = str(normalized.get("teamManageStatus") or "").strip()
+    message = str(normalized.get("teamManageMessage") or "").strip()
+    if normalized.get("teamManageUploaded"):
+        return "success"
+    if "未配置" in status_text or "未配置" in message or "跳过" in status_text:
+        return "disabled"
+    if "失败" in status_text or "失败" in message:
+        return "failed"
+    return "pending"
+
+
 def _infer_registration_status(normalized: dict, prefer_explicit: bool = False) -> str:
     """
     推断注册状态分类。
@@ -211,6 +272,37 @@ def _infer_registration_status(normalized: dict, prefer_explicit: bool = False) 
     if last_error:
         return "failed"
     if status:
+        return "success"
+    return "pending"
+
+
+def _infer_login_state(normalized: dict, prefer_explicit: bool = False) -> str:
+    """
+    推断登录验证状态。
+
+    参数:
+        normalized: 标准化账号记录
+        prefer_explicit: 是否优先使用显式状态
+    返回:
+        str: `pending/success/failed/disabled`
+        AI by zb
+    """
+    explicit = str(normalized.get("loginState") or normalized.get("loginStatus") or "").strip().lower()
+    if prefer_explicit and explicit in ALLOWED_LOGIN_STATES:
+        return explicit
+
+    oauth_tokens = normalized.get("oauthTokens") or {}
+    if isinstance(oauth_tokens, dict) and str(oauth_tokens.get("access_token") or "").strip():
+        return "success"
+
+    status = str(normalized.get("status") or "").strip()
+    login_message = str(normalized.get("loginMessage") or "").strip()
+    last_error = str(normalized.get("lastError") or "").strip()
+    if any(keyword in status for keyword in ("登录失败", "Token获取失败", "未获取到 OAuth", "未获取到 token")):
+        return "failed"
+    if login_message or last_error:
+        return "failed"
+    if any(keyword in status for keyword in ("登录成功", "已登录", "已上传Sub2Api")):
         return "success"
     return "pending"
 
@@ -281,16 +373,13 @@ def _infer_overall_status(normalized: dict, prefer_explicit: bool = False) -> st
     if prefer_explicit and explicit in ALLOWED_REGISTRATION_STATES:
         return explicit
 
-    registration_status = _infer_registration_status(normalized)
-    plus_state = _infer_plus_state(normalized)
+    login_state = _infer_login_state(normalized)
     sub2api_state = _infer_sub2api_state(normalized)
 
-    if registration_status == "failed":
+    if login_state == "failed" or sub2api_state == "failed":
         return "failed"
-    if registration_status == "pending":
+    if login_state == "pending" or sub2api_state == "pending":
         return "pending"
-    if plus_state == "failed" or sub2api_state == "failed":
-        return "failed"
     return "success"
 
 
@@ -306,14 +395,21 @@ def _normalize_account_record(record: dict) -> dict:
     """
     raw_record = record or {}
     has_registration_state = "registrationStatus" in raw_record
+    has_login_state = "loginState" in raw_record or "loginStatus" in raw_record
     has_plus_state = "plusState" in raw_record
     has_sub2api_state = "sub2apiState" in raw_record
+    has_team_manage_state = "teamManageState" in raw_record
     has_overall_state = "overallStatus" in raw_record
 
     normalized = _merge_nested_dict(ACCOUNT_RECORD_DEFAULTS, raw_record)
     normalized["email"] = str(normalized.get("email") or "").strip()
     normalized["password"] = str(normalized.get("password") or "N/A")
+    normalized["accountCategory"] = _normalize_account_category(
+        normalized.get("accountCategory") or normalized.get("account_category")
+    )
     normalized["status"] = str(normalized.get("status") or "")
+    normalized["loginMessage"] = str(normalized.get("loginMessage") or "")
+    normalized["loginVerifiedAt"] = str(normalized.get("loginVerifiedAt") or "")
     normalized["accessToken"] = str(normalized.get("accessToken") or "")
     normalized["mailboxContext"] = str(normalized.get("mailboxContext") or "")
     normalized["plusStatus"] = str(normalized.get("plusStatus") or "")
@@ -323,12 +419,16 @@ def _normalize_account_record(record: dict) -> dict:
     normalized["sub2apiStatus"] = str(normalized.get("sub2apiStatus") or "")
     normalized["sub2apiMessage"] = str(normalized.get("sub2apiMessage") or "")
     normalized["sub2apiUploadedAt"] = str(normalized.get("sub2apiUploadedAt") or "")
+    normalized["teamManageStatus"] = str(normalized.get("teamManageStatus") or "")
+    normalized["teamManageMessage"] = str(normalized.get("teamManageMessage") or "")
+    normalized["teamManageUploadedAt"] = str(normalized.get("teamManageUploadedAt") or "")
     normalized["oauthOutputFile"] = str(normalized.get("oauthOutputFile") or "")
     normalized["lastError"] = str(normalized.get("lastError") or "")
     normalized["plusCalled"] = bool(normalized.get("plusCalled"))
     normalized["plusSuccess"] = bool(normalized.get("plusSuccess"))
     normalized["sub2apiUploaded"] = bool(normalized.get("sub2apiUploaded"))
     normalized["sub2apiAutoUploadEnabled"] = bool(normalized.get("sub2apiAutoUploadEnabled"))
+    normalized["teamManageUploaded"] = bool(normalized.get("teamManageUploaded"))
 
     session_info = normalized.get("sessionInfo")
     if not isinstance(session_info, dict):
@@ -373,8 +473,14 @@ def _normalize_account_record(record: dict) -> dict:
         normalized["sub2apiUploaded"] = True
 
     normalized["registrationStatus"] = _infer_registration_status(normalized, prefer_explicit=has_registration_state)
+    normalized["loginState"] = _infer_login_state(normalized, prefer_explicit=has_login_state)
+    normalized["loginStatus"] = normalized["loginState"]
     normalized["plusState"] = _infer_plus_state(normalized, prefer_explicit=has_plus_state)
     normalized["sub2apiState"] = _infer_sub2api_state(normalized, prefer_explicit=has_sub2api_state)
+    normalized["teamManageState"] = _infer_team_manage_state(
+        normalized,
+        prefer_explicit=has_team_manage_state,
+    )
     normalized["overallStatus"] = _infer_overall_status(normalized, prefer_explicit=has_overall_state)
 
     if not normalized["plusStatus"]:
@@ -398,6 +504,16 @@ def _normalize_account_record(record: dict) -> dict:
             normalized["sub2apiStatus"] = "未启用"
         else:
             normalized["sub2apiStatus"] = "待上传"
+
+    if not normalized["teamManageStatus"]:
+        if normalized["teamManageState"] == "success":
+            normalized["teamManageStatus"] = "已上传"
+        elif normalized["teamManageState"] == "failed":
+            normalized["teamManageStatus"] = "上传失败"
+        elif normalized["teamManageState"] == "disabled":
+            normalized["teamManageStatus"] = "未启用"
+        else:
+            normalized["teamManageStatus"] = "待上传"
 
     timestamp = str(
         normalized.get("updatedAt")
@@ -490,9 +606,13 @@ def _record_to_row(record: dict) -> dict:
     return {
         "email": normalized["email"],
         "password": normalized["password"],
+        "account_category": normalized["accountCategory"],
         "status_text": normalized["status"],
         "overall_status": normalized["overallStatus"],
         "registration_status": normalized["registrationStatus"],
+        "login_status": normalized["loginState"],
+        "login_message": normalized["loginMessage"],
+        "login_verified_at": normalized["loginVerifiedAt"],
         "access_token": normalized["accessToken"],
         "mailbox_context": normalized["mailboxContext"],
         "session_info_json": json.dumps(normalized["sessionInfo"], ensure_ascii=False),
@@ -509,6 +629,11 @@ def _record_to_row(record: dict) -> dict:
         "sub2api_message": normalized["sub2apiMessage"],
         "sub2api_uploaded_at": normalized["sub2apiUploadedAt"],
         "sub2api_auto_upload_enabled": 1 if normalized["sub2apiAutoUploadEnabled"] else 0,
+        "team_manage_uploaded": 1 if normalized["teamManageUploaded"] else 0,
+        "team_manage_status": normalized["teamManageState"],
+        "team_manage_status_text": normalized["teamManageStatus"],
+        "team_manage_message": normalized["teamManageMessage"],
+        "team_manage_uploaded_at": normalized["teamManageUploadedAt"],
         "oauth_tokens_json": json.dumps(normalized["oauthTokens"], ensure_ascii=False),
         "oauth_output_file": normalized["oauthOutputFile"],
         "delivery_info_json": json.dumps(normalized["deliveryInfo"], ensure_ascii=False),
@@ -531,8 +656,13 @@ def _row_to_record(row: sqlite3.Row) -> dict:
     payload = {
         "email": row["email"],
         "password": row["password"],
+        "accountCategory": row["account_category"],
         "time": row["updated_at"],
         "status": row["status_text"],
+        "loginStatus": row["login_status"],
+        "loginState": row["login_status"],
+        "loginMessage": row["login_message"],
+        "loginVerifiedAt": row["login_verified_at"],
         "accessToken": row["access_token"],
         "mailboxContext": row["mailbox_context"],
         "sessionInfo": _safe_json_loads(row["session_info_json"], {}),
@@ -547,6 +677,11 @@ def _row_to_record(row: sqlite3.Row) -> dict:
         "sub2apiMessage": row["sub2api_message"],
         "sub2apiUploadedAt": row["sub2api_uploaded_at"],
         "sub2apiAutoUploadEnabled": bool(row["sub2api_auto_upload_enabled"]),
+        "teamManageUploaded": bool(row["team_manage_uploaded"]),
+        "teamManageState": row["team_manage_status"],
+        "teamManageStatus": row["team_manage_status_text"],
+        "teamManageMessage": row["team_manage_message"],
+        "teamManageUploadedAt": row["team_manage_uploaded_at"],
         "oauthTokens": _safe_json_loads(row["oauth_tokens_json"], {}),
         "oauthOutputFile": row["oauth_output_file"],
         "deliveryInfo": _safe_json_loads(row["delivery_info_json"], {}),
@@ -579,9 +714,13 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS accounts (
             email TEXT PRIMARY KEY,
             password TEXT NOT NULL DEFAULT 'N/A',
+            account_category TEXT NOT NULL DEFAULT 'normal',
             status_text TEXT NOT NULL DEFAULT '',
             overall_status TEXT NOT NULL DEFAULT 'pending',
             registration_status TEXT NOT NULL DEFAULT 'pending',
+            login_status TEXT NOT NULL DEFAULT 'pending',
+            login_message TEXT NOT NULL DEFAULT '',
+            login_verified_at TEXT NOT NULL DEFAULT '',
             access_token TEXT NOT NULL DEFAULT '',
             mailbox_context TEXT NOT NULL DEFAULT '',
             session_info_json TEXT NOT NULL DEFAULT '{}',
@@ -598,6 +737,11 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
             sub2api_message TEXT NOT NULL DEFAULT '',
             sub2api_uploaded_at TEXT NOT NULL DEFAULT '',
             sub2api_auto_upload_enabled INTEGER NOT NULL DEFAULT 0,
+            team_manage_uploaded INTEGER NOT NULL DEFAULT 0,
+            team_manage_status TEXT NOT NULL DEFAULT 'pending',
+            team_manage_status_text TEXT NOT NULL DEFAULT '',
+            team_manage_message TEXT NOT NULL DEFAULT '',
+            team_manage_uploaded_at TEXT NOT NULL DEFAULT '',
             oauth_tokens_json TEXT NOT NULL DEFAULT '{}',
             oauth_output_file TEXT NOT NULL DEFAULT '',
             delivery_info_json TEXT NOT NULL DEFAULT '{}',
@@ -614,6 +758,12 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
         """
     )
     _ensure_account_columns(connection)
+    connection.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS idx_accounts_account_category ON accounts(account_category);
+        CREATE INDEX IF NOT EXISTS idx_accounts_team_manage_status ON accounts(team_manage_status);
+        """
+    )
     connection.execute(
         """
         INSERT INTO meta(key, value)
@@ -638,6 +788,15 @@ def _ensure_account_columns(connection: sqlite3.Connection) -> None:
         for row in connection.execute("PRAGMA table_info(accounts)").fetchall()
     }
     required_columns = {
+        "account_category": "TEXT NOT NULL DEFAULT 'normal'",
+        "login_status": "TEXT NOT NULL DEFAULT 'pending'",
+        "login_message": "TEXT NOT NULL DEFAULT ''",
+        "login_verified_at": "TEXT NOT NULL DEFAULT ''",
+        "team_manage_uploaded": "INTEGER NOT NULL DEFAULT 0",
+        "team_manage_status": "TEXT NOT NULL DEFAULT 'pending'",
+        "team_manage_status_text": "TEXT NOT NULL DEFAULT ''",
+        "team_manage_message": "TEXT NOT NULL DEFAULT ''",
+        "team_manage_uploaded_at": "TEXT NOT NULL DEFAULT ''",
         "delivery_info_json": "TEXT NOT NULL DEFAULT '{}'",
     }
 
@@ -676,30 +835,40 @@ def _migrate_legacy_accounts(connection: sqlite3.Connection) -> None:
             connection.execute(
                 """
                 INSERT INTO accounts (
-                    email, password, status_text, overall_status, registration_status,
+                    email, password, account_category, status_text, overall_status, registration_status,
+                    login_status, login_message, login_verified_at,
                     access_token, mailbox_context, session_info_json,
                     plus_called, plus_success, plus_status, plus_status_text, plus_message,
                     plus_request_id, plus_called_at,
                     sub2api_uploaded, sub2api_status, sub2api_status_text, sub2api_message,
                     sub2api_uploaded_at, sub2api_auto_upload_enabled,
+                    team_manage_uploaded, team_manage_status, team_manage_status_text, team_manage_message,
+                    team_manage_uploaded_at,
                     oauth_tokens_json, oauth_output_file, delivery_info_json,
                     created_at, updated_at, last_error
                 )
                 VALUES (
-                    :email, :password, :status_text, :overall_status, :registration_status,
+                    :email, :password, :account_category, :status_text, :overall_status, :registration_status,
+                    :login_status, :login_message, :login_verified_at,
                     :access_token, :mailbox_context, :session_info_json,
                     :plus_called, :plus_success, :plus_status, :plus_status_text, :plus_message,
                     :plus_request_id, :plus_called_at,
                     :sub2api_uploaded, :sub2api_status, :sub2api_status_text, :sub2api_message,
                     :sub2api_uploaded_at, :sub2api_auto_upload_enabled,
+                    :team_manage_uploaded, :team_manage_status, :team_manage_status_text, :team_manage_message,
+                    :team_manage_uploaded_at,
                     :oauth_tokens_json, :oauth_output_file, :delivery_info_json,
                     :created_at, :updated_at, :last_error
                 )
                 ON CONFLICT(email) DO UPDATE SET
                     password = excluded.password,
+                    account_category = excluded.account_category,
                     status_text = excluded.status_text,
                     overall_status = excluded.overall_status,
                     registration_status = excluded.registration_status,
+                    login_status = excluded.login_status,
+                    login_message = excluded.login_message,
+                    login_verified_at = excluded.login_verified_at,
                     access_token = excluded.access_token,
                     mailbox_context = excluded.mailbox_context,
                     session_info_json = excluded.session_info_json,
@@ -716,6 +885,11 @@ def _migrate_legacy_accounts(connection: sqlite3.Connection) -> None:
                     sub2api_message = excluded.sub2api_message,
                     sub2api_uploaded_at = excluded.sub2api_uploaded_at,
                     sub2api_auto_upload_enabled = excluded.sub2api_auto_upload_enabled,
+                    team_manage_uploaded = excluded.team_manage_uploaded,
+                    team_manage_status = excluded.team_manage_status,
+                    team_manage_status_text = excluded.team_manage_status_text,
+                    team_manage_message = excluded.team_manage_message,
+                    team_manage_uploaded_at = excluded.team_manage_uploaded_at,
                     oauth_tokens_json = excluded.oauth_tokens_json,
                     oauth_output_file = excluded.oauth_output_file,
                     delivery_info_json = excluded.delivery_info_json,
@@ -752,8 +926,13 @@ def _refresh_derived_statuses(connection: sqlite3.Connection) -> None:
         raw_payload = {
             "email": row["email"],
             "password": row["password"],
+            "accountCategory": row["account_category"],
             "time": row["updated_at"],
             "status": row["status_text"],
+            "loginStatus": row["login_status"],
+            "loginState": row["login_status"],
+            "loginMessage": row["login_message"],
+            "loginVerifiedAt": row["login_verified_at"],
             "accessToken": row["access_token"],
             "mailboxContext": row["mailbox_context"],
             "sessionInfo": _safe_json_loads(row["session_info_json"], {}),
@@ -768,6 +947,11 @@ def _refresh_derived_statuses(connection: sqlite3.Connection) -> None:
             "sub2apiMessage": row["sub2api_message"],
             "sub2apiUploadedAt": row["sub2api_uploaded_at"],
             "sub2apiAutoUploadEnabled": bool(row["sub2api_auto_upload_enabled"]),
+            "teamManageUploaded": bool(row["team_manage_uploaded"]),
+            "teamManageState": row["team_manage_status"],
+            "teamManageStatus": row["team_manage_status_text"],
+            "teamManageMessage": row["team_manage_message"],
+            "teamManageUploadedAt": row["team_manage_uploaded_at"],
             "oauthTokens": _safe_json_loads(row["oauth_tokens_json"], {}),
             "oauthOutputFile": row["oauth_output_file"],
             "deliveryInfo": _safe_json_loads(row["delivery_info_json"], {}),
@@ -782,10 +966,15 @@ def _refresh_derived_statuses(connection: sqlite3.Connection) -> None:
             UPDATE accounts
             SET overall_status = :overall_status,
                 registration_status = :registration_status,
+                login_status = :login_status,
+                login_message = :login_message,
+                login_verified_at = :login_verified_at,
                 plus_status = :plus_status,
                 plus_status_text = :plus_status_text,
                 sub2api_status = :sub2api_status,
                 sub2api_status_text = :sub2api_status_text,
+                team_manage_status = :team_manage_status,
+                team_manage_status_text = :team_manage_status_text,
                 last_error = :last_error
             WHERE email = :email
             """,
@@ -909,30 +1098,40 @@ def upsert_account_record(email: str, updates: dict) -> dict:
         connection.execute(
             """
             INSERT INTO accounts (
-                email, password, status_text, overall_status, registration_status,
+                email, password, account_category, status_text, overall_status, registration_status,
+                login_status, login_message, login_verified_at,
                 access_token, mailbox_context, session_info_json,
                 plus_called, plus_success, plus_status, plus_status_text, plus_message,
                 plus_request_id, plus_called_at,
                 sub2api_uploaded, sub2api_status, sub2api_status_text, sub2api_message,
                 sub2api_uploaded_at, sub2api_auto_upload_enabled,
+                team_manage_uploaded, team_manage_status, team_manage_status_text, team_manage_message,
+                team_manage_uploaded_at,
                 oauth_tokens_json, oauth_output_file, delivery_info_json,
                 created_at, updated_at, last_error
             )
             VALUES (
-                :email, :password, :status_text, :overall_status, :registration_status,
+                :email, :password, :account_category, :status_text, :overall_status, :registration_status,
+                :login_status, :login_message, :login_verified_at,
                 :access_token, :mailbox_context, :session_info_json,
                 :plus_called, :plus_success, :plus_status, :plus_status_text, :plus_message,
                 :plus_request_id, :plus_called_at,
                 :sub2api_uploaded, :sub2api_status, :sub2api_status_text, :sub2api_message,
                 :sub2api_uploaded_at, :sub2api_auto_upload_enabled,
+                :team_manage_uploaded, :team_manage_status, :team_manage_status_text, :team_manage_message,
+                :team_manage_uploaded_at,
                 :oauth_tokens_json, :oauth_output_file, :delivery_info_json,
                 :created_at, :updated_at, :last_error
             )
             ON CONFLICT(email) DO UPDATE SET
                 password = excluded.password,
+                account_category = excluded.account_category,
                 status_text = excluded.status_text,
                 overall_status = excluded.overall_status,
                 registration_status = excluded.registration_status,
+                login_status = excluded.login_status,
+                login_message = excluded.login_message,
+                login_verified_at = excluded.login_verified_at,
                 access_token = excluded.access_token,
                 mailbox_context = excluded.mailbox_context,
                 session_info_json = excluded.session_info_json,
@@ -949,6 +1148,11 @@ def upsert_account_record(email: str, updates: dict) -> dict:
                 sub2api_message = excluded.sub2api_message,
                 sub2api_uploaded_at = excluded.sub2api_uploaded_at,
                 sub2api_auto_upload_enabled = excluded.sub2api_auto_upload_enabled,
+                team_manage_uploaded = excluded.team_manage_uploaded,
+                team_manage_status = excluded.team_manage_status,
+                team_manage_status_text = excluded.team_manage_status_text,
+                team_manage_message = excluded.team_manage_message,
+                team_manage_uploaded_at = excluded.team_manage_uploaded_at,
                 oauth_tokens_json = excluded.oauth_tokens_json,
                 oauth_output_file = excluded.oauth_output_file,
                 delivery_info_json = excluded.delivery_info_json,
@@ -992,10 +1196,13 @@ def delete_account_record(email: str) -> bool:
 
 def query_account_records(
     keyword: str = "",
+    account_category: str = "",
     registration_status: str = "",
     overall_status: str = "",
     plus_status: str = "",
     sub2api_status: str = "",
+    team_manage_status: str = "",
+    login_status: str = "",
     page: int = 1,
     page_size: int = 20,
 ) -> dict:
@@ -1004,10 +1211,12 @@ def query_account_records(
 
     参数:
         keyword: 关键字
+        account_category: 账号分类
         registration_status: 注册状态
         overall_status: 整体状态
         plus_status: Plus 状态
         sub2api_status: Sub2Api 状态
+        team_manage_status: Team 管理状态
         page: 页码
         page_size: 每页条数
     返回:
@@ -1022,10 +1231,13 @@ def query_account_records(
     params: list[Any] = []
 
     keyword = str(keyword or "").strip()
+    account_category = _normalize_account_category(account_category) if str(account_category or "").strip() else ""
     registration_status = str(registration_status or "").strip().lower()
     overall_status = str(overall_status or "").strip().lower()
     plus_status = str(plus_status or "").strip().lower()
     sub2api_status = str(sub2api_status or "").strip().lower()
+    team_manage_status = str(team_manage_status or "").strip().lower()
+    login_status = str(login_status or "").strip().lower()
 
     if keyword:
         where_clauses.append(
@@ -1038,16 +1250,25 @@ def query_account_records(
                 OR LOWER(plus_message) LIKE ?
                 OR LOWER(sub2api_status_text) LIKE ?
                 OR LOWER(sub2api_message) LIKE ?
+                OR LOWER(team_manage_status_text) LIKE ?
+                OR LOWER(team_manage_message) LIKE ?
                 OR LOWER(updated_at) LIKE ?
             )
             """
         )
         pattern = f"%{keyword.lower()}%"
-        params.extend([pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern])
+        params.extend([pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern])
+
+    if account_category in ALLOWED_ACCOUNT_CATEGORIES:
+        where_clauses.append("account_category = ?")
+        params.append(account_category)
 
     if registration_status in ALLOWED_REGISTRATION_STATES:
         where_clauses.append("registration_status = ?")
         params.append(registration_status)
+    if login_status in ALLOWED_LOGIN_STATES:
+        where_clauses.append("login_status = ?")
+        params.append(login_status)
     if overall_status in ALLOWED_REGISTRATION_STATES:
         where_clauses.append("overall_status = ?")
         params.append(overall_status)
@@ -1057,6 +1278,9 @@ def query_account_records(
     if sub2api_status in ALLOWED_SUB2API_STATES:
         where_clauses.append("sub2api_status = ?")
         params.append(sub2api_status)
+    if team_manage_status in ALLOWED_TEAM_MANAGE_STATES:
+        where_clauses.append("team_manage_status = ?")
+        params.append(team_manage_status)
 
     where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
     offset = (page - 1) * page_size
@@ -1110,13 +1334,22 @@ def sanitize_account_record_for_web(record: dict) -> dict:
     )
     delivery_info = normalized.get("deliveryInfo") or {}
     delivery_delivered = bool(delivery_info.get("delivered"))
+    account_category = str(normalized.get("accountCategory") or "normal")
+    is_mother_account = account_category == "mother"
 
     return {
         "email": normalized.get("email", ""),
         "password": normalized.get("password", ""),
+        "accountCategory": account_category,
+        "accountCategoryLabel": "母号" if is_mother_account else "普号",
+        "isMotherAccount": is_mother_account,
         "status": normalized.get("status", ""),
         "time": normalized.get("time", ""),
         "registrationStatus": normalized.get("registrationStatus", "pending"),
+        "loginStatus": normalized.get("loginStatus", "pending"),
+        "loginState": normalized.get("loginState", "pending"),
+        "loginMessage": normalized.get("loginMessage", ""),
+        "loginVerifiedAt": normalized.get("loginVerifiedAt", ""),
         "overallStatus": normalized.get("overallStatus", "pending"),
         "plusState": normalized.get("plusState", "idle"),
         "sub2apiState": normalized.get("sub2apiState", "pending"),
@@ -1129,6 +1362,11 @@ def sanitize_account_record_for_web(record: dict) -> dict:
         "sub2apiStatus": normalized.get("sub2apiStatus", ""),
         "sub2apiMessage": normalized.get("sub2apiMessage", ""),
         "sub2apiAutoUploadEnabled": normalized.get("sub2apiAutoUploadEnabled", False),
+        "teamManageUploaded": normalized.get("teamManageUploaded", False),
+        "teamManageState": normalized.get("teamManageState", "pending"),
+        "teamManageStatus": normalized.get("teamManageStatus", ""),
+        "teamManageMessage": normalized.get("teamManageMessage", ""),
+        "teamManageUploadedAt": normalized.get("teamManageUploadedAt", ""),
         "deliveryDelivered": delivery_delivered,
         "deliveryVendor": str(delivery_info.get("vendor") or ""),
         "deliveryTargetEmail": str(delivery_info.get("targetEmail") or ""),
@@ -1149,6 +1387,9 @@ def sanitize_account_record_for_web(record: dict) -> dict:
         "canRetryTeam": bool(has_access_token or has_password),
         "canEditStatus": bool(normalized.get("email")),
         "canDeleteAccount": bool(normalized.get("email")),
+        "canLoginSub2api": bool(normalized.get("email") and has_password),
         "canUploadSub2api": bool(has_oauth_tokens or has_password),
+        "canUploadExistingToken": bool(has_oauth_tokens),
+        "canUploadTeamManage": bool(is_mother_account and has_oauth_tokens),
         "canDeliver": bool(normalized.get("email") and has_password),
     }

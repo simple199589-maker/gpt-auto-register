@@ -36,6 +36,7 @@ from app.account_store import (
     sanitize_account_record_for_web as _store_sanitize_account_record_for_web,
     upsert_account_record as _store_upsert_account_record,
 )
+from app.proxy import apply_proxy_to_session
 
 # 尝试导入 Faker 库
 try:
@@ -95,7 +96,7 @@ def create_http_session():
     adapter = HTTPAdapter(max_retries=retry_strategy)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
-    return session
+    return apply_proxy_to_session(session)
 
 
 # 创建全局 HTTP Session

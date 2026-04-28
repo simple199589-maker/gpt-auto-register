@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app.config import (
+    EMAIL_PROVIDER,
     EMAIL_WORKER_URL,
     EMAIL_DOMAIN_INDEX,
     EMAIL_WAIT_TIMEOUT,
@@ -20,11 +21,104 @@ from app.config import (
     HTTP_TIMEOUT,
     EMAIL_ADMIN_PASSWORD
 )
+from app.proxy import current_requests_proxies
 from app.utils import http_session, get_user_agent, extract_verification_code
 
 MAILBOX_CONTEXT_PREFIX = "mailbox::"
+OUTLOOK_CONTEXT_PREFIX = "outlook::"
 GENERATE_LENGTH = 16
 DEFAULT_EMAIL_LIMIT = 20
+_EMAIL_PROVIDER_OVERRIDE = ""
+OUTLOOK_EMAIL_DOMAINS = {
+    "outlook.com",
+    "hotmail.com",
+    "live.com",
+    "msn.com",
+}
+
+
+def set_email_provider_override(provider: str) -> None:
+    """
+    设置邮箱 provider 运行时覆盖值，供手工脚本和测试使用。
+
+    参数:
+        provider: `worker/outlook`，空字符串表示使用配置
+    返回:
+        None
+        AI by zb
+    """
+    global _EMAIL_PROVIDER_OVERRIDE
+    _EMAIL_PROVIDER_OVERRIDE = str(provider or "").strip().lower()
+
+
+def _get_email_provider() -> str:
+    """
+    获取当前生效的邮箱 provider。
+
+    返回:
+        str: `worker/outlook`
+        AI by zb
+    """
+    provider = _EMAIL_PROVIDER_OVERRIDE or str(EMAIL_PROVIDER or "worker").strip().lower()
+    return provider if provider in {"worker", "outlook"} else "worker"
+
+
+def _is_outlook_context(mailbox_context: str) -> bool:
+    """
+    判断邮箱上下文是否明确指定 Outlook provider。
+
+    参数:
+        mailbox_context: 邮箱上下文
+    返回:
+        bool: 是否为 Outlook 上下文
+        AI by zb
+    """
+    return str(mailbox_context or "").strip().startswith(OUTLOOK_CONTEXT_PREFIX)
+
+
+def is_outlook_email_address(email: str) -> bool:
+    """
+    根据邮箱域名判断是否应使用 Outlook provider。
+
+    参数:
+        email: 邮箱地址或邮箱上下文
+    返回:
+        bool: 是否为 Outlook 系邮箱
+        AI by zb
+    """
+    mailbox = _resolve_mailbox_context(email)
+    domain = str(mailbox or "").rsplit("@", 1)[-1].strip().lower()
+    return domain in OUTLOOK_EMAIL_DOMAINS
+
+
+def _should_use_outlook(mailbox_context: str = "") -> bool:
+    """
+    判断当前调用是否应走 Outlook provider。
+
+    参数:
+        mailbox_context: 可选邮箱上下文
+    返回:
+        bool: 是否使用 Outlook
+        AI by zb
+    """
+    return (
+        _get_email_provider() == "outlook"
+        or _is_outlook_context(mailbox_context)
+        or is_outlook_email_address(mailbox_context)
+    )
+
+
+def _load_outlook_service():
+    """
+    延迟加载 Outlook provider，避免普通 worker 分支产生循环依赖。
+
+    返回:
+        module: Outlook 邮箱服务模块
+        AI by zb
+    """
+    from app import outlook_email_service
+
+    return outlook_email_service
 
 
 def _build_admin_headers():
@@ -63,7 +157,8 @@ def _request_email_api(
             headers=_build_admin_headers(),
             params=params,
             json=json_body,
-            timeout=HTTP_TIMEOUT
+            timeout=HTTP_TIMEOUT,
+            proxies=current_requests_proxies(),
         )
     except Exception as e:
         print(f"❌ 邮箱服务请求失败: {e}")
@@ -168,6 +263,17 @@ def send_single_email(
         Dict[str, Any]: 发送结果
         AI by zb
     """
+    if _should_use_outlook():
+        return _load_outlook_service().send_single_email(
+            to_email=to_email,
+            subject=subject,
+            html=html,
+            text=text,
+            from_email=from_email,
+            from_name=from_name,
+            scheduled_at=scheduled_at,
+        )
+
     payload = {
         "from": str(from_email or "").strip() or "auth@joini.cloud",
         "fromName": str(from_name or "").strip() or "授权信息",
@@ -308,6 +414,8 @@ def _resolve_mailbox_context(jwt_token: str):
     mailbox = str(jwt_token).strip()
     if mailbox.startswith(MAILBOX_CONTEXT_PREFIX):
         mailbox = mailbox[len(MAILBOX_CONTEXT_PREFIX):]
+    if mailbox.startswith(OUTLOOK_CONTEXT_PREFIX):
+        mailbox = mailbox[len(OUTLOOK_CONTEXT_PREFIX):]
 
     return mailbox if "@" in mailbox else None
 
@@ -479,6 +587,13 @@ def fetch_valid_emails(jwt_token: str, since_marker: Optional[int] = None, with_
     @returns {Dict[str, Any]} 包含有效邮件列表和 next_marker 的结果
     @author AI by zb
     """
+    if _should_use_outlook(jwt_token):
+        return _load_outlook_service().fetch_valid_emails(
+            jwt_token,
+            since_marker=since_marker,
+            with_detail=with_detail,
+        )
+
     mailbox = _resolve_mailbox_context(jwt_token)
     if not mailbox:
         return {
@@ -528,6 +643,9 @@ def create_temp_email():
     返回:
         tuple: (邮箱地址, 兼容旧调用链的邮箱上下文令牌)，失败返回 (None, None)
     """
+    if _should_use_outlook():
+        return _load_outlook_service().create_temp_email()
+
     print("📧 正在创建临时邮箱...")
 
     params = {
@@ -573,6 +691,9 @@ def fetch_emails(jwt_token: str):
     返回:
         list: 邮件列表，失败返回 None
     """
+    if _should_use_outlook(jwt_token):
+        return _load_outlook_service().fetch_emails(jwt_token)
+
     mailbox = _resolve_mailbox_context(jwt_token)
     if not mailbox:
         print("  获取邮件错误: 无法从兼容令牌中解析邮箱地址")
@@ -622,6 +743,9 @@ def get_email_detail(jwt_token: str, email_id: str):
     返回:
         dict: 邮件详情，失败返回 None
     """
+    if _should_use_outlook(jwt_token):
+        return _load_outlook_service().get_email_detail(jwt_token, email_id)
+
     response = _request_email_api("GET", f"/api/email/{email_id}")
     if response is None:
         return None
