@@ -279,6 +279,10 @@ body::after {
     text-align: center;
 }
 
+.hidden-file-input {
+    display: none;
+}
+
 .main-panel {
     min-width: 0;
     display: flex;
@@ -701,6 +705,21 @@ body::after {
 
 .login-otp-row .ant-input {
     width: 100%;
+}
+
+.login-otp-status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 24px;
+    color: var(--text-sub);
+    font-size: 12px;
+}
+
+.login-otp-actions {
+    display: flex;
+    justify-content: flex-end;
 }
 
 .accounts-table .ant-table {

@@ -91,7 +91,7 @@ Sub2Api 上传使用后台 `email/password` 登录获取 bearer；`base_url` 建
 
 母号支持使用已保存的 OAuth 三件套单账号导入 Team 管理；导入接口使用 `X-API-Key` 认证，API Key 填写在 `team_manage.api_key`。
 
-代理开关可在 Web 设置中调整；开启后，Codex 登录、邮箱接口和 Sub2Api 上传请求会使用 `http://host:port`。
+代理开关可在 Web 设置中调整；开启后仅 Codex OAuth 登录链路使用 `http://host:port`，邮箱接口、Sub2Api 上传和 Team 管理导入保持直连。
 
 ## 模块概览
 

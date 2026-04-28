@@ -220,8 +220,11 @@ const app = createApp({
         const settingsSaving = ref(false)
         const groupIdsInputFocused = ref(false)
         const accountsLoading = ref(false)
+        const accountExporting = ref(false)
+        const accountImporting = ref(false)
         const accounts = ref([])
         const logContainerRef = ref(null)
+        const accountImportFileRef = ref(null)
         const accountActionLoading = reactive({})
         const actionPopoverOpen = reactive({})
         const showManualAccountPanel = ref(false)
@@ -235,6 +238,13 @@ const app = createApp({
         const loginUploadRecord = ref(null)
         const loginUploadSubmitting = ref(false)
         const loginOtpSubmitting = ref(false)
+        const loginOtpReady = ref(false)
+        const loginOtpStatusText = ref('')
+        const loginOtpResendRemaining = ref(60)
+        const loginOtpResending = ref(false)
+        const loginUploadCancelling = ref(false)
+        let loginOtpStatusTimer = null
+        let loginUploadRequestSeq = 0
         const loginUploadForm = reactive({
             otpMode: 'auto',
             uploadTargets: ['sub2api'],
@@ -287,6 +297,26 @@ const app = createApp({
         })
 
         const pagedAccounts = computed(() => accounts.value)
+
+        /**
+         * 构建账号列表筛选参数。
+         *
+         * @author AI by zb
+         */
+        function buildAccountFilterParams(includePagination = true) {
+            const params = new URLSearchParams({
+                keyword: String(accountFilters.keyword || '').trim(),
+                account_category: accountFilters.category === 'all' ? '' : accountFilters.category,
+                login_status: accountFilters.login === 'all' ? '' : accountFilters.login,
+                sub2api_status: accountFilters.sub2api === 'all' ? '' : accountFilters.sub2api,
+                team_manage_status: accountFilters.teamManage === 'all' ? '' : accountFilters.teamManage,
+            })
+            if (includePagination) {
+                params.set('page', String(accountPagination.current))
+                params.set('page_size', String(accountPagination.pageSize))
+            }
+            return params
+        }
 
         const monitorStatusText = computed(() => {
             if (isRunning.value) {
@@ -524,18 +554,164 @@ const app = createApp({
             }
         }
 
+        /**
+         * 从下载响应头提取文件名。
+         *
+         * @author AI by zb
+         */
+        function resolveDownloadFilename(response, fallback) {
+            const disposition = response.headers.get('Content-Disposition') || ''
+            const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i)
+            if (utf8Match && utf8Match[1]) {
+                return decodeURIComponent(utf8Match[1].replaceAll('"', ''))
+            }
+            const normalMatch = disposition.match(/filename="?([^";]+)"?/i)
+            return normalMatch && normalMatch[1] ? normalMatch[1] : fallback
+        }
+
+        /**
+         * 下载账号导出 JSON。
+         *
+         * @author AI by zb
+         */
+        async function downloadAccountExport(query, fallbackFilename) {
+            const response = await fetch(`/api/accounts/export?${query.toString()}`)
+            if (!response.ok) {
+                let message = `导出失败: ${response.status}`
+                try {
+                    const data = await response.json()
+                    message = data && (data.error || data.message) ? (data.error || data.message) : message
+                } catch (error) {
+                    message = response.statusText || message
+                }
+                throw new Error(message)
+            }
+
+            const blob = await response.blob()
+            const filename = resolveDownloadFilename(response, fallbackFilename)
+            const objectUrl = URL.createObjectURL(blob)
+            const link = document.createElement('a')
+            link.href = objectUrl
+            link.download = filename
+            document.body.appendChild(link)
+            link.click()
+            document.body.removeChild(link)
+            URL.revokeObjectURL(objectUrl)
+        }
+
+        /**
+         * 导出当前筛选条件下的全部账号。
+         *
+         * @author AI by zb
+         */
+        async function exportFilteredAccounts() {
+            accountExporting.value = true
+            try {
+                await downloadAccountExport(buildAccountFilterParams(false), `accounts_export_${Date.now()}.json`)
+                showSuccess('账号导出已开始')
+            } catch (error) {
+                showError(error.message)
+            } finally {
+                accountExporting.value = false
+            }
+        }
+
+        /**
+         * 导出单个账号。
+         *
+         * @author AI by zb
+         */
+        async function exportSingleAccount(record) {
+            if (!record || !record.email) {
+                return
+            }
+            const actionKey = buildActionKey('/api/accounts/export', record.email)
+            accountActionLoading[actionKey] = true
+            try {
+                const query = new URLSearchParams({ email: record.email })
+                await downloadAccountExport(query, `account_export_${record.email}_${Date.now()}.json`)
+                showSuccess('账号导出已开始')
+            } catch (error) {
+                showError(`${record.email}\n${error.message}`)
+            } finally {
+                accountActionLoading[actionKey] = false
+            }
+        }
+
+        /**
+         * 打开账号 JSON 文件选择器。
+         *
+         * @author AI by zb
+         */
+        function triggerImportJsonFile() {
+            if (isRunning.value) {
+                showError('任务运行中，请稍后再导入')
+                return
+            }
+            if (accountImportFileRef.value) {
+                accountImportFileRef.value.value = ''
+                accountImportFileRef.value.click()
+            }
+        }
+
+        /**
+         * 读取文本文件。
+         *
+         * @author AI by zb
+         */
+        function readFileAsText(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader()
+                reader.onload = () => resolve(String(reader.result || ''))
+                reader.onerror = () => reject(new Error('读取文件失败'))
+                reader.readAsText(file, 'utf-8')
+            })
+        }
+
+        /**
+         * 导入账号 JSON 文件。
+         *
+         * @author AI by zb
+         */
+        async function handleImportJsonFileChange(event) {
+            const file = event && event.target && event.target.files ? event.target.files[0] : null
+            if (!file) {
+                return
+            }
+
+            accountImporting.value = true
+            try {
+                const text = await readFileAsText(file)
+                const payload = JSON.parse(text)
+                const data = await requestJson('/api/accounts/import-json', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                })
+                const failed = Array.isArray(data && data.failed) ? data.failed.length : 0
+                const message = failed
+                    ? `已导入 ${data.imported || 0} 个账号，失败 ${failed} 个`
+                    : (data && data.message ? data.message : '账号导入完成')
+                showSuccess(message)
+                if (accountPagination.current !== 1) {
+                    accountPagination.current = 1
+                } else {
+                    await loadAccounts()
+                }
+            } catch (error) {
+                showError(error.message || '导入失败')
+            } finally {
+                accountImporting.value = false
+                if (event && event.target) {
+                    event.target.value = ''
+                }
+            }
+        }
+
         async function loadAccounts() {
             accountsLoading.value = true
             try {
-                const query = new URLSearchParams({
-                    page: String(accountPagination.current),
-                    page_size: String(accountPagination.pageSize),
-                    keyword: String(accountFilters.keyword || '').trim(),
-                    account_category: accountFilters.category === 'all' ? '' : accountFilters.category,
-                    login_status: accountFilters.login === 'all' ? '' : accountFilters.login,
-                    sub2api_status: accountFilters.sub2api === 'all' ? '' : accountFilters.sub2api,
-                    team_manage_status: accountFilters.teamManage === 'all' ? '' : accountFilters.teamManage,
-                })
+                const query = buildAccountFilterParams(true)
                 const data = await requestJson(`/api/accounts?${query.toString()}`)
                 accounts.value = Array.isArray(data && data.items) ? data.items : []
                 accountPagination.total = Number(data && data.pagination && data.pagination.total || 0)
@@ -666,6 +842,7 @@ const app = createApp({
                 '/api/accounts/login-sub2api',
                 '/api/accounts/upload-sub2api',
                 '/api/accounts/upload-team-manage',
+                '/api/accounts/export',
                 '/api/accounts/delete'
             ].some((url) => isAccountActionRunning(url, email))
         }
@@ -674,7 +851,7 @@ const app = createApp({
             return Boolean(
                 record
                 && (
-                    record.canLoginSub2api
+                    record.email
                     || record.canDeleteAccount
                     || record.canUploadExistingToken
                     || record.canUploadTeamManage
@@ -763,6 +940,89 @@ const app = createApp({
                 ? ['sub2api', 'team_manage']
                 : ['sub2api']
             loginUploadForm.otpCode = ''
+            loginOtpReady.value = false
+            loginOtpStatusText.value = ''
+            loginOtpResendRemaining.value = 60
+        }
+
+        /**
+         * 停止登录验证码状态轮询。
+         *
+         * @author AI by zb
+         */
+        function stopLoginOtpStatusPolling() {
+            if (loginOtpStatusTimer) {
+                clearInterval(loginOtpStatusTimer)
+                loginOtpStatusTimer = null
+            }
+        }
+
+        /**
+         * 将后端验证码等待状态同步到弹窗。
+         *
+         * @author AI by zb
+         */
+        function applyLoginOtpStatus(data) {
+            const active = Boolean(data && data.active)
+            loginOtpReady.value = active && Boolean(data && data.can_submit)
+            loginOtpStatusText.value = data && data.message
+                ? String(data.message)
+                : (active ? '验证码已发送，请输入 6 位验证码' : '正在等待验证码发送')
+            const remaining = Number(data && data.resend_remaining)
+            loginOtpResendRemaining.value = Number.isFinite(remaining) ? Math.max(Math.ceil(remaining), 0) : 60
+        }
+
+        /**
+         * 拉取当前账号的验证码等待状态。
+         *
+         * @author AI by zb
+         */
+        async function refreshLoginOtpStatus() {
+            const record = loginUploadRecord.value
+            if (!record || !record.email || loginUploadForm.otpMode !== 'manual') {
+                return
+            }
+            try {
+                const query = new URLSearchParams({ email: record.email })
+                const data = await requestJson(`/api/accounts/login-otp/status?${query.toString()}`)
+                applyLoginOtpStatus(data)
+            } catch (error) {
+                loginOtpStatusText.value = error.message || '验证码状态获取失败'
+            }
+        }
+
+        /**
+         * 开始轮询手填验证码状态。
+         *
+         * @author AI by zb
+         */
+        function startLoginOtpStatusPolling() {
+            stopLoginOtpStatusPolling()
+            loginOtpReady.value = false
+            loginOtpStatusText.value = '正在等待验证码发送'
+            loginOtpResendRemaining.value = 60
+            refreshLoginOtpStatus()
+            loginOtpStatusTimer = setInterval(refreshLoginOtpStatus, 1000)
+        }
+
+        /**
+         * 请求后端取消当前手填验证码等待。
+         *
+         * @author AI by zb
+         */
+        async function cancelLoginOtpFlow(email) {
+            if (!email) {
+                return
+            }
+            try {
+                await requestJson('/api/accounts/login-otp/cancel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email })
+                })
+            } catch (error) {
+                showError(error.message)
+            }
         }
 
         /**
@@ -784,10 +1044,23 @@ const app = createApp({
          *
          * @author AI by zb
          */
-        function closeLoginUploadModal() {
-            if (loginUploadSubmitting.value) {
+        async function closeLoginUploadModal() {
+            const record = loginUploadRecord.value
+            if (loginUploadSubmitting.value && loginUploadForm.otpMode !== 'manual') {
+                showError('自动登录进行中，暂不支持中途取消')
                 return
             }
+            const shouldCancel = Boolean(record && record.email && loginUploadSubmitting.value)
+            if (shouldCancel) {
+                loginUploadCancelling.value = true
+                loginUploadRequestSeq += 1
+                await cancelLoginOtpFlow(record.email)
+                loginUploadCancelling.value = false
+            }
+            stopLoginOtpStatusPolling()
+            loginUploadSubmitting.value = false
+            loginOtpSubmitting.value = false
+            loginOtpResending.value = false
             loginUploadModalOpen.value = false
             loginUploadRecord.value = null
             resetLoginUploadForm()
@@ -799,6 +1072,9 @@ const app = createApp({
          * @author AI by zb
          */
         async function submitLoginUpload() {
+            if (loginUploadSubmitting.value) {
+                return
+            }
             const record = loginUploadRecord.value
             if (!record || !record.email) {
                 return
@@ -811,19 +1087,49 @@ const app = createApp({
                 return
             }
 
+            const requestSeq = loginUploadRequestSeq + 1
+            loginUploadRequestSeq = requestSeq
             loginUploadSubmitting.value = true
+            if (loginUploadForm.otpMode === 'manual') {
+                startLoginOtpStatusPolling()
+            }
+            const actionKey = buildActionKey('/api/accounts/login-sub2api', record.email)
+            accountActionLoading[actionKey] = true
             try {
-                const data = await runAccountAction('/api/accounts/login-sub2api', record.email, {
-                    otp_mode: loginUploadForm.otpMode,
-                    upload_targets: targets
+                const data = await requestJson('/api/accounts/login-sub2api', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        email: record.email,
+                        otp_mode: loginUploadForm.otpMode,
+                        upload_targets: targets
+                    })
                 })
+                if (requestSeq !== loginUploadRequestSeq) {
+                    return
+                }
+                if (!data || data.success !== false || data.cancelled) {
+                    showSuccess(data && data.message ? data.message : '操作成功')
+                } else {
+                    showError(data.message || '操作失败')
+                }
+                await loadAccounts()
                 if (data && data.success !== false) {
+                    stopLoginOtpStatusPolling()
                     loginUploadModalOpen.value = false
                     loginUploadRecord.value = null
                     resetLoginUploadForm()
                 }
+            } catch (error) {
+                if (requestSeq === loginUploadRequestSeq) {
+                    showError(`${record.email}\n${error.message}`)
+                }
             } finally {
-                loginUploadSubmitting.value = false
+                accountActionLoading[actionKey] = false
+                if (requestSeq === loginUploadRequestSeq) {
+                    loginUploadSubmitting.value = false
+                    stopLoginOtpStatusPolling()
+                }
             }
         }
 
@@ -836,6 +1142,10 @@ const app = createApp({
             const record = loginUploadRecord.value
             const code = String(loginUploadForm.otpCode || '').trim()
             if (!record || !record.email) {
+                return
+            }
+            if (!loginOtpReady.value) {
+                showError('请等待验证码发送完成')
                 return
             }
             if (!/^\d{6}$/.test(code)) {
@@ -856,6 +1166,37 @@ const app = createApp({
                 showError(error.message)
             } finally {
                 loginOtpSubmitting.value = false
+            }
+        }
+
+        /**
+         * 请求重发当前登录验证码。
+         *
+         * @author AI by zb
+         */
+        async function resendLoginOtp() {
+            const record = loginUploadRecord.value
+            if (!record || !record.email) {
+                return
+            }
+            if (loginOtpResendRemaining.value > 0) {
+                showError(`请等待 ${loginOtpResendRemaining.value} 秒后再重发`)
+                return
+            }
+            loginOtpResending.value = true
+            try {
+                const data = await requestJson('/api/accounts/login-otp/resend', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email: record.email })
+                })
+                applyLoginOtpStatus(data)
+                showSuccess(data && data.message ? data.message : '验证码已重发')
+            } catch (error) {
+                showError(error.message)
+                await refreshLoginOtpStatus()
+            } finally {
+                loginOtpResending.value = false
             }
         }
 
@@ -897,6 +1238,10 @@ const app = createApp({
             }
             if (actionKey === 'uploadTeamManage') {
                 await handleUploadTeamManage(record)
+                return
+            }
+            if (actionKey === 'exportAccount') {
+                await exportSingleAccount(record)
                 return
             }
             if (actionKey === 'deleteAccount') {
@@ -1086,11 +1431,15 @@ const app = createApp({
 
         onBeforeUnmount(() => {
             stopPolling()
+            stopLoginOtpStatusPolling()
         })
 
         return {
             accountColumns,
+            accountExporting,
             accountFilters,
+            accountImportFileRef,
+            accountImporting,
             accountPagination,
             accounts,
             accountsLoading,
@@ -1100,6 +1449,7 @@ const app = createApp({
             currentTab,
             copyText,
             closeManualAccountPanel,
+            exportFilteredAccounts,
             failCount,
             getAccountRowKey,
             getActionPopoverKey,
@@ -1127,6 +1477,7 @@ const app = createApp({
             handleAccountActionMenu,
             handleDeleteAccount,
             handleGroupIdsBlur,
+            handleImportJsonFileChange,
             handleLoginSub2Api,
             handleUploadSub2Api,
             handleUploadTeamManage,
@@ -1138,7 +1489,12 @@ const app = createApp({
             isRunning,
             lastUpdate,
             loadAccounts,
+            loginOtpReady,
+            loginOtpResending,
+            loginOtpResendRemaining,
             loginOtpSubmitting,
+            loginOtpStatusText,
+            loginUploadCancelling,
             loginUploadForm,
             loginUploadModalOpen,
             loginUploadRecord,
@@ -1155,6 +1511,7 @@ const app = createApp({
             paginationTotalText,
             resetAccountPagination,
             resetManualAccountForm,
+            resendLoginOtp,
             runAccountAction,
             saveAutomationSettings,
             settings,
@@ -1170,7 +1527,8 @@ const app = createApp({
             targetCount,
             toggleManualAccountPanel,
             totalAccountPages,
-            totalInventory
+            totalInventory,
+            triggerImportJsonFile
         }
     }
 })

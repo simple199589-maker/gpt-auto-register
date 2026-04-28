@@ -36,7 +36,6 @@ from app.account_store import (
     sanitize_account_record_for_web as _store_sanitize_account_record_for_web,
     upsert_account_record as _store_upsert_account_record,
 )
-from app.proxy import apply_proxy_to_session
 
 # 尝试导入 Faker 库
 try:
@@ -81,10 +80,11 @@ LAST_NAMES = [
 
 def create_http_session():
     """
-    创建带有重试机制的 HTTP Session
+    创建直连的内部服务 HTTP Session。
     
     返回:
         requests.Session: 配置好重试策略的 Session 对象
+        AI by zb
     """
     session = requests.Session()
     retry_strategy = Retry(
@@ -96,7 +96,7 @@ def create_http_session():
     adapter = HTTPAdapter(max_retries=retry_strategy)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
-    return apply_proxy_to_session(session)
+    return session
 
 
 # 创建全局 HTTP Session

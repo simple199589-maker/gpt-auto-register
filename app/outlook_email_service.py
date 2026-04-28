@@ -22,7 +22,6 @@ from app.config import (
     OUTLOOK_SITE_CODE,
     OUTLOOK_WAIT_TIMEOUT,
 )
-from app.proxy import current_requests_proxies
 from app.utils import extract_verification_code, get_user_agent, http_session
 
 OUTLOOK_CONTEXT_PREFIX = "outlook::"
@@ -77,7 +76,6 @@ def _request_outlook_api(
             params=params,
             json=json_body,
             timeout=HTTP_TIMEOUT,
-            proxies=current_requests_proxies(),
         )
     except Exception as exc:
         print(f"❌ Outlook API 请求失败: {exc}")

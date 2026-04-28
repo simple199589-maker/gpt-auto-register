@@ -20,7 +20,7 @@ import app.plus_activation_api as plus_activation_api
 import app.plus_binding as plus_binding
 import app.account_actions as account_actions
 import app.login_sub2api as login_sub2api
-from app.account_store import count_account_records, query_account_records
+from app.account_store import count_account_records, query_account_records, upsert_account_record
 from app.config import cfg, select_activation_api_base_url, update_automation_settings
 from app.utils import get_account_record, parse_account_record, sanitize_account_record_for_web
 
@@ -158,6 +158,7 @@ class ManualOtpBroker:
         """
         self._condition = threading.Condition()
         self._challenges = {}
+        self._pending_cancels = set()
 
     @staticmethod
     def _normalize_email(email: str) -> str:
@@ -172,7 +173,7 @@ class ManualOtpBroker:
         """
         return str(email or "").strip().lower()
 
-    def wait_for_code(self, email: str, timeout: int, logger=None) -> str:
+    def wait_for_code(self, email: str, timeout: int, logger=None, resend_callback=None) -> str:
         """
         等待前端提交 6 位验证码。
 
@@ -180,30 +181,165 @@ class ManualOtpBroker:
             email: 邮箱地址
             timeout: 等待秒数
             logger: 日志器
+            resend_callback: 同一登录会话内触发重发验证码的回调
         返回:
             str: 验证码，超时返回空字符串
             AI by zb
         """
         normalized_email = self._normalize_email(email)
         deadline = time.time() + max(int(timeout or 300), 30)
+        if not normalized_email:
+            return ""
         with self._condition:
+            if normalized_email in self._pending_cancels:
+                self._pending_cancels.discard(normalized_email)
+                if logger:
+                    logger.info("[WebOTP] 手填验证码等待开始前已取消 | email=%s", normalized_email)
+                return ""
             self._challenges[normalized_email] = {
                 "code": "",
+                "cancelled": False,
+                "status": "waiting",
                 "createdAt": time.time(),
                 "expiresAt": deadline,
+                "lastSentAt": time.time(),
+                "nextResendAt": time.time() + 60,
+                "resendCount": 0,
+                "resendCallback": resend_callback,
             }
             self._condition.notify_all()
             while time.time() < deadline:
                 challenge = self._challenges.get(normalized_email) or {}
+                if challenge.get("cancelled"):
+                    self._challenges.pop(normalized_email, None)
+                    self._pending_cancels.discard(normalized_email)
+                    if logger:
+                        logger.info("[WebOTP] 手填验证码已取消 | email=%s", normalized_email)
+                    return ""
                 code = str(challenge.get("code") or "").strip()
                 if code:
                     self._challenges.pop(normalized_email, None)
                     return code
                 self._condition.wait(timeout=max(min(deadline - time.time(), 1), 0.1))
             self._challenges.pop(normalized_email, None)
+            self._pending_cancels.discard(normalized_email)
         if logger:
             logger.warning("[WebOTP] 等待手填验证码超时 | email=%s", normalized_email)
         return ""
+
+    def get_status(self, email: str) -> dict:
+        """
+        查询当前手填验证码等待状态。
+
+        参数:
+            email: 邮箱地址
+        返回:
+            dict: 前端可展示的状态快照
+            AI by zb
+        """
+        normalized_email = self._normalize_email(email)
+        now = time.time()
+        with self._condition:
+            challenge = dict(self._challenges.get(normalized_email) or {})
+        if not normalized_email:
+            return {"active": False, "status": "idle", "message": "缺少邮箱参数"}
+        if not challenge:
+            return {
+                "active": False,
+                "status": "idle",
+                "message": "等待发送验证码",
+                "can_submit": False,
+                "resend_available": False,
+                "resend_remaining": 60,
+            }
+        next_resend_at = float(challenge.get("nextResendAt") or now + 60)
+        resend_remaining = max(int(round(next_resend_at - now)), 0)
+        cancelled = bool(challenge.get("cancelled"))
+        return {
+            "active": not cancelled,
+            "status": "cancelled" if cancelled else str(challenge.get("status") or "waiting"),
+            "message": "验证码已发送，请输入 6 位验证码" if not cancelled else "登录已取消",
+            "can_submit": not cancelled,
+            "resend_available": not cancelled and resend_remaining <= 0,
+            "resend_remaining": resend_remaining,
+            "expires_in": max(int(round(float(challenge.get("expiresAt") or now) - now)), 0),
+            "resend_count": int(challenge.get("resendCount") or 0),
+        }
+
+    def cancel(self, email: str) -> tuple[bool, str]:
+        """
+        取消指定账号的手填验证码等待。
+
+        参数:
+            email: 邮箱地址
+        返回:
+            tuple[bool, str]: 是否接受取消与提示
+            AI by zb
+        """
+        normalized_email = self._normalize_email(email)
+        if not normalized_email:
+            return False, "缺少邮箱参数"
+        with self._condition:
+            challenge = self._challenges.get(normalized_email)
+            if challenge:
+                challenge["cancelled"] = True
+            else:
+                self._pending_cancels.add(normalized_email)
+            self._condition.notify_all()
+        return True, "登录已取消"
+
+    def request_resend(self, email: str) -> tuple[bool, str, dict]:
+        """
+        请求当前登录会话重发邮箱验证码。
+
+        参数:
+            email: 邮箱地址
+        返回:
+            tuple[bool, str, dict]: 是否成功、提示、状态快照
+            AI by zb
+        """
+        normalized_email = self._normalize_email(email)
+        if not normalized_email:
+            return False, "缺少邮箱参数", self.get_status(email)
+
+        with self._condition:
+            challenge = self._challenges.get(normalized_email)
+            if not challenge:
+                return False, "当前账号没有等待中的手填验证码", self.get_status(email)
+            if challenge.get("cancelled"):
+                return False, "登录已取消", self.get_status(email)
+            now = time.time()
+            next_resend_at = float(challenge.get("nextResendAt") or now + 60)
+            if now < next_resend_at:
+                remaining = max(int(round(next_resend_at - now)), 1)
+                return False, f"请等待 {remaining} 秒后再重发", self.get_status(email)
+            resend_callback = challenge.get("resendCallback")
+
+        if not callable(resend_callback):
+            return False, "当前登录会话不支持重发验证码", self.get_status(email)
+
+        try:
+            callback_result = resend_callback()
+        except Exception as exc:
+            return False, f"重发验证码失败: {exc}", self.get_status(email)
+
+        if isinstance(callback_result, tuple):
+            succeeded = bool(callback_result[0])
+            callback_message = str(callback_result[1] if len(callback_result) > 1 else "").strip()
+        else:
+            succeeded = bool(callback_result)
+            callback_message = ""
+        if not succeeded:
+            return False, callback_message or "重发验证码失败", self.get_status(email)
+
+        with self._condition:
+            challenge = self._challenges.get(normalized_email)
+            if challenge:
+                challenge["lastSentAt"] = time.time()
+                challenge["nextResendAt"] = time.time() + 60
+                challenge["resendCount"] = int(challenge.get("resendCount") or 0) + 1
+                self._condition.notify_all()
+        return True, callback_message or "验证码已重发", self.get_status(email)
 
     def submit_code(self, email: str, code: str) -> tuple[bool, str]:
         """
@@ -235,7 +371,7 @@ class ManualOtpBroker:
 manual_otp_broker = ManualOtpBroker()
 
 
-def manual_otp_provider(email: str, timeout: int, logger=None) -> str:
+def manual_otp_provider(email: str, timeout: int, logger=None, resend_callback=None) -> str:
     """
     提供给 OAuth 登录流程的 Web 手填验证码回调。
 
@@ -243,11 +379,17 @@ def manual_otp_provider(email: str, timeout: int, logger=None) -> str:
         email: 邮箱地址
         timeout: 等待秒数
         logger: 日志器
+        resend_callback: 重发验证码回调
     返回:
         str: 6 位验证码
         AI by zb
     """
-    return manual_otp_broker.wait_for_code(email, timeout, logger=logger)
+    return manual_otp_broker.wait_for_code(
+        email,
+        timeout,
+        logger=logger,
+        resend_callback=resend_callback,
+    )
 
 
 def capture_driver_frame(driver):
@@ -670,6 +812,54 @@ def json_download_response(payload: dict, filename: str) -> Response:
     )
 
 
+def extract_account_import_items(payload) -> list[dict]:
+    """
+    从导入 JSON 中提取账号对象列表。
+
+    参数:
+        payload: 前端提交的 JSON 数据
+    返回:
+        list[dict]: 账号对象列表
+        AI by zb
+    """
+    if isinstance(payload, dict) and isinstance(payload.get("items"), list):
+        raw_items = payload.get("items") or []
+    elif isinstance(payload, dict) and isinstance(payload.get("account"), dict):
+        raw_items = [payload.get("account") or {}]
+    elif isinstance(payload, list):
+        raw_items = payload
+    elif isinstance(payload, dict):
+        raw_items = [payload]
+    else:
+        raw_items = []
+    return [item for item in raw_items if isinstance(item, dict)]
+
+
+def build_account_import_item(record: dict) -> dict:
+    """
+    构造账号导入更新数据，保留 OAuth 三件套。
+
+    参数:
+        record: 导入文件中的账号对象
+    返回:
+        dict: 写入账号仓储的数据
+        AI by zb
+    """
+    item = dict(record or {})
+    token_source = item.get("oauthTokens") or item.get("tokens") or {}
+    if not isinstance(token_source, dict):
+        token_source = {}
+    item["oauthTokens"] = {
+        "access_token": str(token_source.get("access_token") or item.get("access_token") or ""),
+        "refresh_token": str(token_source.get("refresh_token") or item.get("refresh_token") or ""),
+        "id_token": str(token_source.get("id_token") or item.get("id_token") or ""),
+        "account_id": str(token_source.get("account_id") or item.get("account_id") or ""),
+    }
+    if not str(item.get("accessToken") or "").strip():
+        item["accessToken"] = item["oauthTokens"]["access_token"]
+    return item
+
+
 # ==========================================
 # 🌐 API 接口
 # ==========================================
@@ -879,6 +1069,50 @@ def import_account_for_login():
         AI by zb
     """
     return create_account_manually()
+
+
+@app.route('/api/accounts/import-json', methods=['POST'])
+def import_accounts_json():
+    """
+    导入账号 JSON，兼容导出文件格式并保留 OAuth 三件套。
+
+    返回:
+        Response: JSON 响应
+        AI by zb
+    """
+    if state.is_running:
+        return jsonify({"error": "批量任务运行中，请稍后再导入"}), 400
+
+    payload = request.get_json(silent=True)
+    items = extract_account_import_items(payload)
+    if not items:
+        return jsonify({"error": "未找到可导入的账号数据"}), 400
+
+    imported_records = []
+    failed_records = []
+    for item in items:
+        email = str(item.get("email") or "").strip()
+        if not email:
+            failed_records.append({"email": "", "message": "缺少邮箱"})
+            continue
+        try:
+            imported = upsert_account_record(email, build_account_import_item(item))
+            imported_records.append(imported)
+        except Exception as exc:
+            failed_records.append({"email": email, "message": str(exc)})
+
+    if not imported_records:
+        return jsonify({"success": False, "imported": 0, "failed": failed_records, "message": "导入失败"}), 400
+
+    return jsonify(
+        {
+            "success": True,
+            "message": f"已导入 {len(imported_records)} 个账号",
+            "imported": len(imported_records),
+            "failed": failed_records,
+            "items": [sanitize_account_record_for_web(item) for item in imported_records],
+        }
+    )
 
 
 @app.route('/api/accounts/deliver', methods=['POST'])
@@ -1265,6 +1499,52 @@ def submit_login_otp():
     accepted, message = manual_otp_broker.submit_code(email, code)
     status_code = 200 if accepted else 400
     return jsonify({"success": accepted, "message": message}), status_code
+
+
+@app.route('/api/accounts/login-otp/status', methods=['GET'])
+def get_login_otp_status():
+    """
+    查询 Web 手填登录验证码状态。
+
+    返回:
+        Response: JSON 响应
+        AI by zb
+    """
+    email = str(request.args.get("email") or "").strip()
+    status = manual_otp_broker.get_status(email)
+    return jsonify({"success": True, **status})
+
+
+@app.route('/api/accounts/login-otp/resend', methods=['POST'])
+def resend_login_otp():
+    """
+    请求当前登录会话重发验证码。
+
+    返回:
+        Response: JSON 响应
+        AI by zb
+    """
+    data = request.json or {}
+    email = str(data.get("email") or "").strip()
+    accepted, message, status = manual_otp_broker.request_resend(email)
+    status_code = 200 if accepted else 400
+    return jsonify({"success": accepted, "message": message, **status}), status_code
+
+
+@app.route('/api/accounts/login-otp/cancel', methods=['POST'])
+def cancel_login_otp():
+    """
+    取消当前账号的 Web 手填验证码等待。
+
+    返回:
+        Response: JSON 响应
+        AI by zb
+    """
+    data = request.json or {}
+    email = str(data.get("email") or "").strip()
+    accepted, message = manual_otp_broker.cancel(email)
+    status_code = 200 if accepted else 400
+    return jsonify({"success": accepted, "message": message, **manual_otp_broker.get_status(email)}), status_code
 
 
 @app.route('/api/accounts/login-sub2api', methods=['POST'])

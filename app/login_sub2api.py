@@ -221,7 +221,7 @@ def upload_to_team_manage(
     """
     active_logger = logger or get_logger("team-manage")
     uploader = TeamManageUploader(
-        create_session(proxy=resolve_proxy(config, "")),
+        create_session(),
         build_team_manage_config(config),
         active_logger,
     )

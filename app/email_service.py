@@ -21,7 +21,6 @@ from app.config import (
     HTTP_TIMEOUT,
     EMAIL_ADMIN_PASSWORD
 )
-from app.proxy import current_requests_proxies
 from app.utils import http_session, get_user_agent, extract_verification_code
 
 MAILBOX_CONTEXT_PREFIX = "mailbox::"
@@ -158,7 +157,6 @@ def _request_email_api(
             params=params,
             json=json_body,
             timeout=HTTP_TIMEOUT,
-            proxies=current_requests_proxies(),
         )
     except Exception as e:
         print(f"❌ 邮箱服务请求失败: {e}")

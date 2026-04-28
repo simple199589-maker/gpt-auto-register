@@ -949,6 +949,40 @@ def _wait_auto_otp(
     return None
 
 
+def _parse_auth_continue_response(response: requests.Response) -> Tuple[str, str]:
+    """
+    从认证接口响应中提取下一步地址与页面类型。
+
+    参数:
+        response: 认证接口响应
+    返回:
+        Tuple[str, str]: (continue_url, page_type)
+        AI by zb
+    """
+    continue_url = ""
+    page_type = ""
+    try:
+        data = response.json()
+        if isinstance(data, dict):
+            continue_url = str(
+                data.get("continue_url")
+                or data.get("continueUrl")
+                or data.get("redirect_to")
+                or data.get("redirect_url")
+                or ""
+            )
+            page_type = str(((data.get("page") or {}).get("type")) or data.get("page_type") or "")
+    except Exception:
+        pass
+
+    response_text = str(getattr(response, "text", "") or "")
+    if not continue_url and "email-verification" in response_text:
+        continue_url = "/email-verification"
+    if not page_type and "email-verification" in continue_url:
+        page_type = "email_otp_verification"
+    return continue_url, page_type
+
+
 def _exchange_code_for_token(
     code: str,
     code_verifier: str,
@@ -1088,48 +1122,65 @@ def perform_http_oauth_login(
     if response.status_code != 200:
         active_logger.warning("[Codex] Step B 失败: HTTP %s | email=%s", response.status_code, email)
         return None
-
-    active_logger.info("[Codex] Step C: 提交密码 | email=%s", email)
-    headers["referer"] = f"{oauth_issuer}/log-in/password"
-    headers.update(generate_datadog_trace())
-
-    sentinel_password = build_sentinel_token(session, device_id, flow="password_verify")
-    if not sentinel_password:
-        active_logger.warning("[Codex] Step C sentinel 失败 | email=%s", email)
-        return None
-    headers["openai-sentinel-token"] = sentinel_password
-
-    try:
-        response = session.post(
-            f"{oauth_issuer}/api/accounts/password/verify",
-            json={"password": password},
-            headers=headers,
-            verify=False,
-            timeout=30,
-            allow_redirects=False,
+    continue_url, page_type = _parse_auth_continue_response(response)
+    if continue_url:
+        active_logger.info(
+            "[Codex] Step B 结果 | continue_url=%s | page_type=%s | email=%s",
+            continue_url[:120],
+            page_type,
+            email,
         )
-    except Exception as exc:
-        active_logger.warning("[Codex] Step C 异常: %s | email=%s", exc, email)
-        return None
-    if response.status_code != 200:
-        active_logger.warning("[Codex] Step C 失败: HTTP %s | email=%s", response.status_code, email)
-        return None
 
-    continue_url = ""
-    page_type = ""
-    try:
-        data = response.json()
-        continue_url = str(data.get("continue_url") or "")
-        page_type = str(((data.get("page") or {}).get("type")) or "")
-    except Exception:
-        pass
+    is_step_b_otp_challenge = page_type == "email_otp_verification" or "email-verification" in continue_url
+    if not is_step_b_otp_challenge:
+        active_logger.info("[Codex] Step C: 提交密码 | email=%s", email)
+        password_referer = f"{oauth_issuer}/log-in/password"
+        if continue_url:
+            password_referer = continue_url if continue_url.startswith("http") else f"{oauth_issuer}{continue_url}"
+        headers["referer"] = password_referer
+        headers.update(generate_datadog_trace())
 
-    active_logger.info(
-        "[Codex] Step C 结果 | continue_url=%s | page_type=%s | email=%s",
-        continue_url[:120],
-        page_type,
-        email,
-    )
+        sentinel_password = build_sentinel_token(session, device_id, flow="password_verify")
+        if not sentinel_password:
+            active_logger.warning("[Codex] Step C sentinel 失败 | email=%s", email)
+            return None
+        headers["openai-sentinel-token"] = sentinel_password
+
+        try:
+            response = session.post(
+                f"{oauth_issuer}/api/accounts/password/verify",
+                json={"password": password},
+                headers=headers,
+                verify=False,
+                timeout=30,
+                allow_redirects=False,
+            )
+        except Exception as exc:
+            active_logger.warning("[Codex] Step C 异常: %s | email=%s", exc, email)
+            return None
+        continue_url, page_type = _parse_auth_continue_response(response)
+        if response.status_code != 200:
+            if response.status_code == 409 and otp_mode == "manual" and not continue_url:
+                continue_url = "/email-verification"
+                page_type = "email_otp_verification"
+            is_otp_challenge = response.status_code == 409 and (
+                page_type == "email_otp_verification" or "email-verification" in continue_url
+            )
+            if not is_otp_challenge:
+                active_logger.warning("[Codex] Step C 失败: HTTP %s | email=%s", response.status_code, email)
+                return None
+            active_logger.info(
+                "[Codex] Step C 返回 OTP 验证挑战: HTTP 409 | continue_url=%s | email=%s",
+                continue_url[:120],
+                email,
+            )
+
+        active_logger.info(
+            "[Codex] Step C 结果 | continue_url=%s | page_type=%s | email=%s",
+            continue_url[:120],
+            page_type,
+            email,
+        )
     if not continue_url:
         active_logger.warning("[Codex] Step C 无 continue_url | email=%s", email)
         return None
@@ -1140,22 +1191,65 @@ def perform_http_oauth_login(
         mailbox_marker = create_mailbox_marker()
 
         try:
-            session.get(
+            verification_response = session.get(
                 verification_url,
                 headers=NAVIGATE_HEADERS,
                 verify=False,
                 timeout=20,
                 allow_redirects=True,
             )
-            active_logger.info("[Codex] 打开 email-verification 页面: %s | email=%s", verification_url[:80], email)
+            active_logger.info(
+                "[Codex] 打开 email-verification 页面: HTTP %s | url=%s | final=%s | email=%s",
+                verification_response.status_code,
+                verification_url[:80],
+                str(verification_response.url)[:120],
+                email,
+            )
         except Exception as exc:
             active_logger.warning("[Codex] 打开 email-verification 异常: %s | email=%s", exc, email)
 
         verify_headers = build_auth_json_headers(
             referer=f"{oauth_issuer}/email-verification",
             device_id=device_id,
-            include_device_id=False,
+            include_device_id=True,
         )
+
+        def send_email_otp(action_label: str) -> Tuple[bool, str]:
+            """
+            在当前认证会话中请求发送邮箱验证码。
+
+            参数:
+                action_label: 日志动作标签
+            返回:
+                Tuple[bool, str]: 是否成功与提示
+                AI by zb
+            """
+            try:
+                send_response = session.get(
+                    f"{oauth_issuer}/api/accounts/email-otp/send",
+                    headers=verify_headers,
+                    verify=False,
+                    timeout=30,
+                )
+                active_logger.info(
+                    "[Codex] %s: HTTP %s | email=%s",
+                    action_label,
+                    send_response.status_code,
+                    email,
+                )
+                if send_response.status_code in {200, 201, 202, 204}:
+                    return True, "验证码已发送"
+                active_logger.warning(
+                    "[Codex] %s 失败详情: HTTP %s | body=%s | email=%s",
+                    action_label,
+                    send_response.status_code,
+                    send_response.text[:200],
+                    email,
+                )
+                return False, f"发送验证码失败: HTTP {send_response.status_code}"
+            except Exception as exc:
+                active_logger.warning("[Codex] %s 异常: %s | email=%s", action_label, exc, email)
+                return False, f"发送验证码异常: {exc}"
 
         otp_code = None
         if otp_mode == "auto":
@@ -1167,20 +1261,7 @@ def perform_http_oauth_login(
                 logger=active_logger,
             )
             if not otp_code:
-                try:
-                    resend_response = session.get(
-                        f"{oauth_issuer}/api/accounts/email-otp/send",
-                        headers=verify_headers,
-                        verify=False,
-                        timeout=30,
-                    )
-                    active_logger.info(
-                        "[Codex] OTP fallback send: HTTP %s | email=%s",
-                        resend_response.status_code,
-                        email,
-                    )
-                except Exception as exc:
-                    active_logger.warning("[Codex] OTP fallback send 异常: %s | email=%s", exc, email)
+                send_email_otp("OTP fallback send")
                 otp_code = _wait_auto_otp(
                     email=email,
                     mailbox_context=resolved_mailbox_context,
@@ -1190,8 +1271,26 @@ def perform_http_oauth_login(
                 )
 
         if not otp_code and otp_mode == "manual":
+            def resend_manual_otp() -> Tuple[bool, str]:
+                """
+                在当前认证会话中重发邮箱验证码。
+
+                返回:
+                    Tuple[bool, str]: 是否成功与提示
+                    AI by zb
+                """
+                return send_email_otp("手填 OTP 重发")
+
             if otp_provider:
-                otp_code = otp_provider(email, 300, active_logger)
+                try:
+                    otp_code = otp_provider(
+                        email,
+                        300,
+                        active_logger,
+                        resend_callback=resend_manual_otp,
+                    )
+                except TypeError:
+                    otp_code = otp_provider(email, 300, active_logger)
             else:
                 otp_code = prompt_for_email_otp(email=email, logger=active_logger, timeout=300)
         if not otp_code:
@@ -1575,7 +1674,7 @@ def upload_to_sub2api(
     """
     active_logger = logger or get_logger()
     uploader = Sub2ApiUploader(
-        create_session(proxy=resolve_proxy(config, "")),
+        create_session(),
         build_sub2api_config(config),
         active_logger,
     )

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -10,11 +12,14 @@ class WebServerLoginSub2ApiTests(unittest.TestCase):
 
     def setUp(self) -> None:
         """创建 Flask 测试客户端。AI by zb"""
-        from app.web_server import app, state
+        from app.web_server import app, manual_otp_broker, state
 
         self.app = app
         self.client = app.test_client()
         state.is_running = False
+        with manual_otp_broker._condition:
+            manual_otp_broker._challenges.clear()
+            manual_otp_broker._pending_cancels.clear()
 
     def test_import_endpoint_imports_login_account(self) -> None:
         """导入接口应调用登录账号导入编排。AI by zb"""
@@ -142,6 +147,73 @@ class WebServerLoginSub2ApiTests(unittest.TestCase):
         self.assertTrue(response.get_json()["success"])
         upload_mock.assert_called_once_with("mother@example.com")
 
+    def test_login_otp_status_and_resend_use_active_waiter(self) -> None:
+        """手填验证码状态与重发应依赖当前等待中的登录会话。AI by zb"""
+        import app.web_server as web_server
+
+        email = "otp-resend@example.com"
+        resend_mock = Mock(return_value=(True, "已重发"))
+        result = {}
+
+        def wait_for_code() -> None:
+            result["code"] = web_server.manual_otp_broker.wait_for_code(
+                email,
+                5,
+                resend_callback=resend_mock,
+            )
+
+        thread = threading.Thread(target=wait_for_code, daemon=True)
+        thread.start()
+        for _ in range(20):
+            if web_server.manual_otp_broker.get_status(email).get("active"):
+                break
+            time.sleep(0.05)
+
+        status_response = self.client.get(f"/api/accounts/login-otp/status?email={email}")
+        self.assertEqual(status_response.status_code, 200)
+        self.assertTrue(status_response.get_json()["active"])
+        self.assertFalse(status_response.get_json()["resend_available"])
+
+        early_resend = self.client.post("/api/accounts/login-otp/resend", json={"email": email})
+        self.assertEqual(early_resend.status_code, 400)
+        resend_mock.assert_not_called()
+
+        with web_server.manual_otp_broker._condition:
+            web_server.manual_otp_broker._challenges[email]["nextResendAt"] = time.time() - 1
+
+        resend_response = self.client.post("/api/accounts/login-otp/resend", json={"email": email})
+        self.assertEqual(resend_response.status_code, 200)
+        self.assertTrue(resend_response.get_json()["success"])
+        resend_mock.assert_called_once()
+
+        submit_response = self.client.post("/api/accounts/login-otp", json={"email": email, "code": "123456"})
+        self.assertEqual(submit_response.status_code, 200)
+        thread.join(timeout=2)
+        self.assertEqual(result["code"], "123456")
+
+    def test_login_otp_cancel_releases_active_waiter(self) -> None:
+        """关闭弹窗取消时应释放等待中的手填验证码流程。AI by zb"""
+        import app.web_server as web_server
+
+        email = "otp-cancel@example.com"
+        result = {}
+
+        def wait_for_code() -> None:
+            result["code"] = web_server.manual_otp_broker.wait_for_code(email, 5)
+
+        thread = threading.Thread(target=wait_for_code, daemon=True)
+        thread.start()
+        for _ in range(20):
+            if web_server.manual_otp_broker.get_status(email).get("active"):
+                break
+            time.sleep(0.05)
+
+        cancel_response = self.client.post("/api/accounts/login-otp/cancel", json={"email": email})
+        self.assertEqual(cancel_response.status_code, 200)
+        self.assertTrue(cancel_response.get_json()["success"])
+        thread.join(timeout=2)
+        self.assertEqual(result["code"], "")
+
     def test_export_single_account_includes_oauth_tokens(self) -> None:
         """单账号导出应包含 OAuth 三件套。AI by zb"""
         import app.web_server as web_server
@@ -211,6 +283,84 @@ class WebServerLoginSub2ApiTests(unittest.TestCase):
         self.assertEqual(first_call["sub2api_status"], "success")
         self.assertEqual(first_call["account_category"], "normal")
         self.assertEqual(first_call["page_size"], 100)
+
+    def test_import_json_accepts_export_payload_with_oauth_tokens(self) -> None:
+        """JSON 导入应接受导出文件并保留 OAuth 三件套。AI by zb"""
+        import app.web_server as web_server
+
+        captured = []
+
+        def fake_upsert(email: str, updates: dict) -> dict:
+            captured.append((email, updates))
+            return {"email": email, **updates}
+
+        payload = {
+            "mode": "batch",
+            "items": [
+                {
+                    "email": "one@example.com",
+                    "password": "one-pass",
+                    "accountCategory": "normal",
+                    "oauthTokens": {
+                        "access_token": "a1",
+                        "refresh_token": "r1",
+                        "id_token": "i1",
+                        "account_id": "acc1",
+                    },
+                    "oauthOutputFile": "output_tokens/one.json",
+                },
+                {
+                    "email": "two@example.com",
+                    "password": "two-pass",
+                    "accountCategory": "mother",
+                    "oauthTokens": {
+                        "access_token": "a2",
+                        "refresh_token": "r2",
+                        "id_token": "i2",
+                        "account_id": "acc2",
+                    },
+                },
+            ],
+        }
+
+        with patch.object(web_server, "upsert_account_record", side_effect=fake_upsert):
+            response = self.client.post("/api/accounts/import-json", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        result = response.get_json()
+        self.assertTrue(result["success"])
+        self.assertEqual(result["imported"], 2)
+        self.assertEqual(captured[0][0], "one@example.com")
+        self.assertEqual(captured[0][1]["oauthTokens"]["access_token"], "a1")
+        self.assertEqual(captured[0][1]["oauthTokens"]["refresh_token"], "r1")
+        self.assertEqual(captured[0][1]["oauthTokens"]["id_token"], "i1")
+        self.assertEqual(captured[1][1]["accountCategory"], "mother")
+
+    def test_import_json_accepts_single_account_object(self) -> None:
+        """JSON 导入应支持单个账号对象。AI by zb"""
+        import app.web_server as web_server
+
+        with patch.object(
+            web_server,
+            "upsert_account_record",
+            return_value={"email": "solo@example.com", "oauthTokens": {"access_token": "access"}},
+        ) as upsert_mock:
+            response = self.client.post(
+                "/api/accounts/import-json",
+                json={
+                    "email": "solo@example.com",
+                    "password": "solo-pass",
+                    "oauthTokens": {
+                        "access_token": "access",
+                        "refresh_token": "refresh",
+                        "id_token": "id",
+                    },
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["imported"], 1)
+        upsert_mock.assert_called_once()
 
 
 if __name__ == "__main__":

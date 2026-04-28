@@ -141,7 +141,7 @@
                     <div class="setting-block">
                         <div class="setting-copy">
                             <div class="setting-title">代理 IP</div>
-                            <div class="setting-desc">开启后，登录、邮箱接口与 Sub2Api 上传走此代理</div>
+                            <div class="setting-desc">开启后，仅 Codex OAuth 登录链路走此代理</div>
                         </div>
                         <a-switch
                             v-model:checked="settings.proxy_enabled"
@@ -348,6 +348,36 @@
                                         <plus-outlined></plus-outlined>
                                     </template>
                                     {{ showManualAccountPanel ? '收起导入' : '导入账号' }}
+                                </a-button>
+
+                                <input
+                                    ref="accountImportFileRef"
+                                    type="file"
+                                    accept="application/json,.json"
+                                    class="hidden-file-input"
+                                    @change="handleImportJsonFileChange"
+                                >
+
+                                <a-button
+                                    :loading="accountImporting"
+                                    :disabled="isRunning || accountsLoading"
+                                    @click="triggerImportJsonFile"
+                                >
+                                    <template #icon>
+                                        <upload-outlined></upload-outlined>
+                                    </template>
+                                    导入 JSON
+                                </a-button>
+
+                                <a-button
+                                    :loading="accountExporting"
+                                    :disabled="accountsLoading"
+                                    @click="exportFilteredAccounts"
+                                >
+                                    <template #icon>
+                                        <download-outlined></download-outlined>
+                                    </template>
+                                    导出当前筛选
                                 </a-button>
 
                                 <a-button :loading="accountsLoading" @click="loadAccounts">
@@ -605,6 +635,12 @@
                                                     上传 Team 管理
                                                 </button>
                                                 <button
+                                                    class="table-action-item"
+                                                    @click="handleAccountActionMenu('exportAccount', record)"
+                                                >
+                                                    导出该账号
+                                                </button>
+                                                <button
                                                     class="table-action-item table-action-item-danger"
                                                     :disabled="!record.canDeleteAccount"
                                                     @click="handleAccountActionMenu('deleteAccount', record)"
@@ -658,10 +694,10 @@
                         v-model:open="loginUploadModalOpen"
                         title="登录并上传"
                         :confirm-loading="loginUploadSubmitting"
-                        :mask-closable="!loginUploadSubmitting"
-                        :keyboard="!loginUploadSubmitting"
+                        :mask-closable="false"
+                        :keyboard="!loginUploadSubmitting || loginUploadForm.otpMode === 'manual'"
                         ok-text="开始登录"
-                        cancel-text="取消"
+                        :cancel-text="loginUploadSubmitting ? '取消登录' : '取消'"
                         @ok="submitLoginUpload"
                         @cancel="closeLoginUploadModal"
                     >
@@ -702,10 +738,14 @@
 
                             <div v-if="loginUploadForm.otpMode === 'manual'" class="login-upload-block login-otp-block">
                                 <div class="field-label">登录验证码</div>
+                                <div class="login-otp-status">
+                                    <span>{{ loginOtpStatusText || '点击开始登录后等待验证码发送' }}</span>
+                                    <a-tag v-if="loginOtpReady" color="green">可填写</a-tag>
+                                </div>
                                 <div class="login-otp-row">
                                     <a-input
                                         v-model:value="loginUploadForm.otpCode"
-                                        :disabled="!loginUploadSubmitting || loginOtpSubmitting"
+                                        :disabled="!loginOtpReady || loginOtpSubmitting || loginUploadCancelling"
                                         inputmode="numeric"
                                         maxlength="6"
                                         placeholder="等待邮件后输入 6 位验证码"
@@ -713,11 +753,21 @@
                                     ></a-input>
                                     <a-button
                                         type="primary"
-                                        :disabled="!loginUploadSubmitting"
+                                        :disabled="!loginOtpReady || loginUploadCancelling"
                                         :loading="loginOtpSubmitting"
                                         @click="submitLoginOtp"
                                     >
                                         提交验证码
+                                    </a-button>
+                                </div>
+                                <div class="login-otp-actions">
+                                    <a-button
+                                        size="small"
+                                        :disabled="!loginOtpReady || loginOtpResendRemaining > 0 || loginUploadCancelling"
+                                        :loading="loginOtpResending"
+                                        @click="resendLoginOtp"
+                                    >
+                                        {{ loginOtpResendRemaining > 0 ? `${loginOtpResendRemaining}s 后可重发` : '重发验证码' }}
                                     </a-button>
                                 </div>
                             </div>
