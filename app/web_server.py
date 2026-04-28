@@ -1442,7 +1442,7 @@ def retry_account_registration():
 
 @app.route('/api/accounts/upload-sub2api', methods=['POST'])
 def upload_account_sub2api():
-    email, maybe_error = _run_manual_account_action("仅上传已有Token到Sub2Api", login_sub2api.upload_existing_tokens_to_sub2api)
+    email, maybe_error = _run_manual_account_action("补传Sub2", login_sub2api.upload_existing_tokens_to_sub2api)
     if email is None:
         return maybe_error
 

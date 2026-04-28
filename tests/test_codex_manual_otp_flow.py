@@ -109,6 +109,43 @@ class CodexManualOtpFlowTests(unittest.TestCase):
 
         return tokens
 
+    def _run_auto_otp_login(self, fake_session: FakeSession) -> dict | None:
+        """
+        执行一次自动验证码登录测试流程。
+
+        参数:
+            fake_session: 伪 OAuth 会话
+        返回:
+            dict | None: token 结果
+            AI by zb
+        """
+        from app.codex import _runtime_impl
+
+        expected_tokens = {
+            "access_token": "access-token",
+            "refresh_token": "refresh-token",
+            "id_token": "id-token",
+        }
+
+        with patch.object(_runtime_impl, "create_session", return_value=fake_session), patch.object(
+            _runtime_impl,
+            "build_sentinel_token",
+            return_value="sentinel-token",
+        ), patch.object(_runtime_impl, "_wait_auto_otp", return_value="123456") as wait_mock, patch.object(
+            _runtime_impl,
+            "_exchange_code_for_token",
+            return_value=expected_tokens,
+        ):
+            tokens = _runtime_impl.perform_http_oauth_login(
+                email="thirdparty@example.com",
+                password="secret-pass",
+                otp_mode="auto",
+                mailbox_context="mailbox::thirdparty@example.com",
+            )
+
+        wait_mock.assert_called_once()
+        return tokens
+
     def test_manual_otp_handles_password_verify_409_challenge(self) -> None:
         """手填验证码模式遇到 Step C 409 OTP 挑战时应等待用户输入。AI by zb"""
         fake_session = FakeSession()
@@ -158,6 +195,37 @@ class CodexManualOtpFlowTests(unittest.TestCase):
         ]
         self.assertEqual(password_calls, [])
         otp_provider.assert_called_once()
+        validate_calls = [
+            kwargs
+            for url, kwargs in fake_session.posts
+            if url.endswith("/api/accounts/email-otp/validate")
+        ]
+        self.assertEqual(validate_calls[0]["json"], {"code": "123456"})
+
+    def test_step_b_passwordless_otp_skips_password_verify_in_auto_mode(self) -> None:
+        """自动模式遇到 Step B passwordless OTP 时也应跳过提交密码。AI by zb"""
+        fake_session = FakeSession(
+            authorize_response=FakeResponse(
+                status_code=200,
+                payload={
+                    "continue_url": "https://auth.openai.com/email-verification",
+                    "page": {
+                        "type": "email_otp_verification",
+                        "payload": {"email_verification_mode": "passwordless_login"},
+                    },
+                },
+            )
+        )
+
+        tokens = self._run_auto_otp_login(fake_session)
+
+        self.assertIsNotNone(tokens)
+        password_calls = [
+            url
+            for url, _kwargs in fake_session.posts
+            if url.endswith("/api/accounts/password/verify")
+        ]
+        self.assertEqual(password_calls, [])
         validate_calls = [
             kwargs
             for url, kwargs in fake_session.posts

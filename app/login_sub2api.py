@@ -219,13 +219,36 @@ def upload_to_team_manage(
         bool: 是否上传成功
         AI by zb
     """
+    uploaded, _message = upload_to_team_manage_with_message(email, tokens, config, logger=logger)
+    return uploaded
+
+
+def upload_to_team_manage_with_message(
+    email: str,
+    tokens: Dict[str, Any],
+    config: Dict[str, Any],
+    logger: Optional[Any] = None,
+) -> tuple[bool, str]:
+    """
+    上传单个账号到 Team 管理并返回失败原因。
+
+    参数:
+        email: 账号邮箱
+        tokens: OAuth token 字典
+        config: 运行配置
+        logger: 日志器
+    返回:
+        tuple[bool, str]: 是否上传成功与失败原因
+        AI by zb
+    """
     active_logger = logger or get_logger("team-manage")
     uploader = TeamManageUploader(
         create_session(),
         build_team_manage_config(config),
         active_logger,
     )
-    return uploader.import_single_account(email, tokens)
+    uploaded = uploader.import_single_account(email, tokens)
+    return uploaded, str(uploader.last_error_message or "").strip()
 
 
 def import_login_account(
@@ -417,8 +440,8 @@ def upload_existing_tokens_to_team_manage(email: str, config_path: str = "") -> 
 
     logger = get_logger("team-manage")
     tokens = dict(account.get("oauthTokens") or {})
-    uploaded = upload_to_team_manage(normalized_email, tokens, config, logger=logger)
-    message = "Team 管理上传成功" if uploaded else "Team 管理上传失败"
+    uploaded, upload_error = upload_to_team_manage_with_message(normalized_email, tokens, config, logger=logger)
+    message = "Team 管理上传成功" if uploaded else (upload_error or "Team 管理上传失败")
     upsert_account_record(
         normalized_email,
         {
@@ -641,12 +664,18 @@ def login_and_upload_account(
                 },
             )
         else:
-            team_uploaded = upload_to_team_manage(normalized_email, tokens, config, logger=get_logger("team-manage"))
+            team_uploaded, team_error = upload_to_team_manage_with_message(
+                normalized_email,
+                tokens,
+                config,
+                logger=get_logger("team-manage"),
+            )
+            team_message = "Team 管理上传成功" if team_uploaded else (team_error or "Team 管理上传失败")
             upload_results.append(
                 (
                     "team_manage",
                     bool(team_uploaded),
-                    "Team 管理上传成功" if team_uploaded else "Team 管理上传失败",
+                    team_message,
                 )
             )
             upsert_account_record(
@@ -656,9 +685,9 @@ def login_and_upload_account(
                     "teamManageUploaded": bool(team_uploaded),
                     "teamManageState": "success" if team_uploaded else "failed",
                     "teamManageStatus": "已上传" if team_uploaded else "上传失败",
-                    "teamManageMessage": "Team 管理上传成功" if team_uploaded else "Team 管理上传失败",
+                    "teamManageMessage": team_message,
                     "teamManageUploadedAt": _current_timestamp() if team_uploaded else "",
-                    "lastError": "" if team_uploaded else "Team 管理上传失败",
+                    "lastError": "" if team_uploaded else team_message,
                 },
             )
 
@@ -783,4 +812,5 @@ __all__ = [
     "run_batch_login_sub2api",
     "upload_existing_tokens_to_team_manage",
     "upload_existing_tokens_to_sub2api",
+    "upload_to_team_manage_with_message",
 ]

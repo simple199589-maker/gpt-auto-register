@@ -86,7 +86,7 @@ class LoginSub2ApiTests(unittest.TestCase):
         self.assertEqual(account["mailboxContext"], "outlook::tracywhite8678gaj@outlook.com")
 
     def test_upload_existing_tokens_does_not_relogin(self) -> None:
-        """仅上传已有 token 时不应重新执行 OAuth 登录。AI by zb"""
+        """补传 Sub2 时不应重新执行 OAuth 登录。AI by zb"""
         from app import login_sub2api
 
         account = {

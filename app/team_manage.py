@@ -47,6 +47,7 @@ class TeamManageUploader:
         self.session = session
         self.config = config
         self.logger = logger
+        self.last_error_message = ""
 
     @staticmethod
     def _decode_jwt_payload(token: str) -> Dict[str, Any]:
@@ -152,11 +153,35 @@ class TeamManageUploader:
                     "success": response_data.get("success"),
                     "code": response_data.get("code"),
                     "message": response_data.get("message"),
+                    "error": response_data.get("error"),
                     "status": response_data.get("status"),
                 },
                 ensure_ascii=False,
             )
         return str(body or "")[:200]
+
+    @staticmethod
+    def _extract_error_message(response_data: Any, body: str, status_code: int) -> str:
+        """
+        从 Team 管理响应中提取可展示错误信息。
+
+        参数:
+            response_data: JSON 响应
+            body: 原始响应文本
+            status_code: HTTP 状态码
+        返回:
+            str: 错误信息
+            AI by zb
+        """
+        if isinstance(response_data, dict):
+            for key in ("error", "message", "detail", "status", "code"):
+                value = response_data.get(key)
+                if value is not None and str(value).strip():
+                    return str(value).strip()
+        fallback = str(body or "").strip()
+        if fallback:
+            return fallback[:500]
+        return f"HTTP {status_code}"
 
     def import_single_account(self, email: str, tokens: Dict[str, Any]) -> bool:
         """
@@ -169,18 +194,22 @@ class TeamManageUploader:
             bool: 是否导入成功
             AI by zb
         """
+        self.last_error_message = ""
         if not str(self.config.base_url or "").strip() or not str(self.config.api_key or "").strip():
+            self.last_error_message = "Team 管理 API Key 未配置"
             return False
         payload = self.build_single_payload(email, tokens)
         if not payload.get("access_token") and not payload.get("session_token") and not payload.get("refresh_token"):
+            self.last_error_message = "缺少可上传的 OAuth token"
             return False
 
         url = urljoin(f"{self.config.base_url.rstrip('/')}/", "admin/teams/import")
+        headers = self._build_headers()
         try:
             response = self.session.post(
                 url,
                 json=payload,
-                headers=self._build_headers(),
+                headers=headers,
                 timeout=30,
                 verify=False,
                 allow_redirects=False,
@@ -188,15 +217,17 @@ class TeamManageUploader:
             if response.status_code in (301, 302, 307, 308):
                 location = str(response.headers.get("Location") or "").strip()
                 if location:
+                    redirect_url = urljoin(url, location)
                     response = self.session.post(
-                        urljoin(url, location),
+                        redirect_url,
                         json=payload,
-                        headers=self._build_headers(),
+                        headers=headers,
                         timeout=30,
                         verify=False,
                         allow_redirects=False,
                     )
         except Exception as exc:
+            self.last_error_message = str(exc)
             if self.logger:
                 self.logger.warning("[TeamManage] 导入异常: %s | email=%s", exc, email)
             return False
@@ -214,10 +245,14 @@ class TeamManageUploader:
             if ok:
                 self.logger.info("[TeamManage] 导入成功: %s | HTTP %s", email, response.status_code)
             else:
+                self.last_error_message = self._extract_error_message(response_data, body, response.status_code)
                 self.logger.warning(
-                    "[TeamManage] 导入失败: %s | HTTP %s | %s",
+                    "[TeamManage] 导入失败: %s | HTTP %s | error=%s | response=%s",
                     email,
                     response.status_code,
+                    self.last_error_message,
                     self._summarize_response(response_data, body),
                 )
+        elif not ok:
+            self.last_error_message = self._extract_error_message(response_data, body, response.status_code)
         return ok
