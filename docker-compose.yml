@@ -1,0 +1,29 @@
+services:
+  gpt-auto-register:
+    build:
+      context: .
+    image: gpt-auto-register:latest
+    container_name: gpt-auto-register
+    restart: unless-stopped
+    shm_size: "1gb"
+    ports:
+      - "${APP_PORT:-5005}:5005"
+    environment:
+      TZ: Asia/Shanghai
+      APP_RUNTIME_DIR: /data
+      CHROME_BIN: /usr/bin/chromium
+      CHROMIUM_BIN: /usr/bin/chromium
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5005/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    volumes:
+      - ${DATA_DIR:-/data/gpt-auto-register}:/data
+      - chromedriver-cache:/root/.local/share/undetected_chromedriver
+      - selenium-cache:/root/.cache/selenium
+
+volumes:
+  chromedriver-cache:
+  selenium-cache:

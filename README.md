@@ -22,6 +22,48 @@ uv run server.py --port 5006
 
 在控制台中进入“账号管理”，导入邮箱和密码，然后点击“启动登录上传”或对单个账号执行“登录并上传”。
 
+## Docker 部署
+
+镜像内已包含 Chromium、chromedriver、Xvfb 和 Python 依赖，运行数据统一挂载到宿主机 `/data/gpt-auto-register/`，容器内路径为 `/data`。
+
+完整部署说明见：`docs/docker-deploy.md`。
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+首次启动会自动生成 `/data/gpt-auto-register/config.yaml`。修改该文件中的邮箱、Sub2Api、代理等配置后重启：
+
+```bash
+docker compose restart
+```
+
+默认访问地址：
+
+```text
+http://localhost:5005
+```
+
+挂载目录说明：
+
+- `/data/gpt-auto-register/config.yaml`：运行配置，等价于本地开发时的 `config.yaml`。
+- `/data/gpt-auto-register/data/accounts.db`：账号 SQLite 数据库。
+- `/data/gpt-auto-register/output_tokens/`：OAuth token 输出目录。
+- `/data/gpt-auto-register/registered_accounts.txt`：历史 TXT 账号文件。
+
+如需修改宿主机数据目录：
+
+```bash
+DATA_DIR=/data/another-dir docker compose up -d
+```
+
+如需修改宿主机端口：
+
+```bash
+APP_PORT=5010 docker compose up -d
+```
+
 ## 命令行验证
 
 Codex 账密直登：

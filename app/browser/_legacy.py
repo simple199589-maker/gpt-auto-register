@@ -53,6 +53,58 @@ CHATGPT_LOGIN_URLS = [
 ]
 
 
+def _resolve_chrome_binary_path() -> str:
+    """
+    解析当前环境可用的 Chrome/Chromium 二进制路径。
+
+    返回:
+        str: 浏览器可执行文件路径，未找到时返回空字符串
+        AI by zb
+    """
+    candidate_paths: list[str] = []
+    for env_name in ("CHROME_BIN", "CHROMIUM_BIN", "GOOGLE_CHROME_BIN"):
+        env_value = str(os.environ.get(env_name) or "").strip()
+        if env_value:
+            candidate_paths.append(env_value)
+
+    if os.name == "nt":
+        candidate_paths.extend(
+            [
+                os.path.join(os.environ.get("PROGRAMFILES", ""), "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "Google", "Chrome", "Application", "chrome.exe"),
+            ]
+        )
+    else:
+        candidate_paths.extend(
+            [
+                "/usr/bin/google-chrome",
+                "/usr/bin/google-chrome-stable",
+                "/usr/bin/chromium",
+                "/usr/bin/chromium-browser",
+            ]
+        )
+
+    for command_name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+        command_path = shutil.which(command_name)
+        if command_path:
+            candidate_paths.append(command_path)
+
+    seen_paths: set[str] = set()
+    for raw_path in candidate_paths:
+        if not raw_path:
+            continue
+        candidate = os.path.abspath(os.path.expanduser(str(raw_path)))
+        normalized = candidate.lower()
+        if normalized in seen_paths:
+            continue
+        seen_paths.add(normalized)
+        if os.path.exists(candidate):
+            return candidate
+
+    return ""
+
+
 class SafeChrome(uc.Chrome):
     """
     自定义 Chrome 类，修复 Windows 下退出时的 WinError 6
@@ -88,11 +140,8 @@ def get_local_chrome_major_version():
     if _CHROME_MAJOR_VERSION_CACHE is not None:
         return _CHROME_MAJOR_VERSION_CACHE or None
 
-    chrome_paths = [
-        os.path.join(os.environ.get("PROGRAMFILES", ""), "Google", "Chrome", "Application", "chrome.exe"),
-        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "Application", "chrome.exe"),
-        os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "Google", "Chrome", "Application", "chrome.exe"),
-    ]
+    chrome_binary_path = _resolve_chrome_binary_path()
+    chrome_paths = [chrome_binary_path] if chrome_binary_path else []
 
     registry_candidates = [
         (getattr(winreg, "HKEY_CURRENT_USER", None), r"Software\Google\Chrome\BLBeacon", "version"),
@@ -227,11 +276,14 @@ def _iter_chromedriver_candidates():
 
     direct_candidates = [
         shutil.which("chromedriver"),
+        "/usr/bin/chromedriver",
+        "/usr/local/bin/chromedriver",
         str((Path(__file__).resolve().parents[2] / "drivers" / "chromedriver.exe")),
     ]
     search_roots = [
         _get_uc_data_path(),
         Path.home() / ".cache" / "selenium" / "chromedriver",
+        Path.home() / ".local" / "share" / "undetected_chromedriver",
         Path.home() / "AppData" / "Roaming" / "undetected_chromedriver",
     ]
 
@@ -248,12 +300,14 @@ def _iter_chromedriver_candidates():
     for root in search_roots:
         if not root.exists():
             continue
-        for candidate in root.rglob("*chromedriver*.exe"):
-            normalized = str(candidate).lower()
-            if normalized in seen_paths or not candidate.is_file():
-                continue
-            seen_paths.add(normalized)
-            candidates.append(candidate)
+        patterns = ["*chromedriver*.exe"] if os.name == "nt" else ["*chromedriver*"]
+        for pattern in patterns:
+            for candidate in root.rglob(pattern):
+                normalized = str(candidate).lower()
+                if normalized in seen_paths or not candidate.is_file():
+                    continue
+                seen_paths.add(normalized)
+                candidates.append(candidate)
 
     return candidates
 
@@ -305,7 +359,8 @@ def _prepare_local_chromedriver_copy(source_path: Path, chrome_major_version: in
     target_dir = uc_data_path / "local_cache"
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    target_name = f"chromedriver_{chrome_major_version or 'auto'}.exe"
+    executable_suffix = ".exe" if os.name == "nt" else ""
+    target_name = f"chromedriver_{chrome_major_version or 'auto'}{executable_suffix}"
     target_path = target_dir / target_name
 
     try:
@@ -326,6 +381,12 @@ def _prepare_local_chromedriver_copy(source_path: Path, chrome_major_version: in
 
     if should_copy:
         shutil.copy2(source_path, target_path)
+
+    if os.name != "nt":
+        try:
+            target_path.chmod(target_path.stat().st_mode | 0o111)
+        except Exception:
+            pass
 
     return target_path
 
@@ -364,11 +425,18 @@ def _build_chrome_options(headless: bool, detach: bool):
         AI by zb
     """
     options = uc.ChromeOptions()
+    chrome_binary_path = _resolve_chrome_binary_path()
+    if chrome_binary_path:
+        options.binary_location = chrome_binary_path
 
     # 某些 ChromeDriver / undetected-chromedriver 组合不识别 detach，
     # 这里不直接注入实验参数，改由上层保留 driver 引用控制窗口生命周期。
     if detach:
         print("ℹ️ 保留浏览器模式由脚本控制，不向 ChromeDriver 注入 detach 参数")
+
+    if os.name != "nt":
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
 
     if headless:
         print("  👻 使用'伪无头'模式 (Off-screen) 以绕过检测...")
