@@ -19,6 +19,221 @@
 
     <script type="text/x-template" id="app-template">
         <div class="console-shell">
+            <header class="mobile-appbar">
+                <a-button class="mobile-menu-trigger" aria-label="打开操作菜单" @click="mobileMenuOpen = true">
+                    <span class="mobile-menu-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none">
+                            <path d="M5 7h14M5 12h14M5 17h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+                        </svg>
+                    </span>
+                </a-button>
+                <div class="mobile-appbar-brand">
+                    <div class="mobile-appbar-title">AutoGPT</div>
+                    <div class="mobile-appbar-subtitle">{{ currentTab === 'dashboard' ? '统计中心' : '账号管理' }}</div>
+                </div>
+                <div class="mobile-appbar-state">
+                    <span class="dot" :class="{ active: isRunning }"></span>
+                </div>
+            </header>
+
+            <a-drawer
+                v-model:open="mobileMenuOpen"
+                placement="left"
+                :width="320"
+                class="mobile-menu-drawer"
+                title="操作菜单"
+            >
+                <div class="drawer-stack">
+                    <div class="brand-card drawer-brand-card">
+                        <div class="brand-mark" aria-hidden="true">
+                            <svg viewBox="0 0 48 48" fill="none">
+                                <defs>
+                                    <linearGradient id="drawerBrandGradient" x1="8" y1="6" x2="40" y2="42" gradientUnits="userSpaceOnUse">
+                                        <stop stop-color="#6D5EF7"></stop>
+                                        <stop offset="1" stop-color="#2D8CFF"></stop>
+                                    </linearGradient>
+                                </defs>
+                                <rect x="4" y="4" width="40" height="40" rx="14" fill="url(#drawerBrandGradient)"></rect>
+                                <path d="M24.8 10.5L15.7 26.2H22.4L20.5 37.5L32.3 21.8H25.8L24.8 10.5Z" fill="white"></path>
+                            </svg>
+                        </div>
+                        <div>
+                            <div class="brand-title">AutoGPT</div>
+                            <div class="brand-subtitle">Vue Console</div>
+                        </div>
+                    </div>
+
+                    <a-menu
+                        mode="inline"
+                        class="nav-menu drawer-nav-menu"
+                        :selected-keys="[currentTab]"
+                        @click="handleMenuClick"
+                    >
+                        <a-menu-item key="dashboard">
+                            <appstore-outlined></appstore-outlined>
+                            <span>仪表盘</span>
+                        </a-menu-item>
+                        <a-menu-item key="accounts">
+                            <team-outlined></team-outlined>
+                            <span>账号管理</span>
+                        </a-menu-item>
+                    </a-menu>
+
+                    <a-card class="sidebar-card" :bordered="false">
+                        <template #title>
+                            <div class="card-title-inline">
+                                <play-circle-outlined></play-circle-outlined>
+                                <span>任务控制</span>
+                            </div>
+                        </template>
+
+                        <div class="control-stack">
+                            <div class="field-label">处理数量</div>
+                            <a-input-number
+                                v-model:value="targetCount"
+                                :min="1"
+                                :max="50"
+                                :controls="false"
+                                class="full-width"
+                            ></a-input-number>
+
+                            <a-button
+                                v-if="!isRunning"
+                                type="primary"
+                                block
+                                class="primary-action"
+                                @click="startTask"
+                            >
+                                <template #icon>
+                                    <play-circle-outlined></play-circle-outlined>
+                                </template>
+                                启动登录上传
+                            </a-button>
+
+                            <a-button
+                                v-else
+                                danger
+                                block
+                                class="secondary-action"
+                                @click="stopTask"
+                            >
+                                <template #icon>
+                                    <pause-circle-outlined></pause-circle-outlined>
+                                </template>
+                                停止运行
+                            </a-button>
+                        </div>
+                    </a-card>
+
+                    <a-card class="sidebar-card settings-card" :bordered="false">
+                        <template #title>
+                            <div class="card-title-inline">
+                                <setting-outlined></setting-outlined>
+                                <span>自动流程</span>
+                            </div>
+                        </template>
+
+                        <div class="setting-block">
+                            <div class="setting-copy">
+                                <div class="setting-title">Sub2Api 自动上传</div>
+                                <div class="setting-desc">登录成功后自动提交到 Sub2Api</div>
+                            </div>
+                            <a-switch
+                                v-model:checked="settings.sub2api_auto_upload_enabled"
+                                :disabled="isRunning || settingsSaving"
+                                :loading="settingsSaving"
+                                @change="saveAutomationSettings"
+                            ></a-switch>
+                        </div>
+
+                        <div class="setting-field">
+                            <div class="setting-copy">
+                                <div class="setting-title">Sub2Api 分组</div>
+                                <div class="setting-desc">支持多个分组 ID，使用逗号分隔，例如 `5,8`</div>
+                            </div>
+                            <a-input
+                                v-model:value="settings.sub2api_group_ids_text"
+                                :disabled="isRunning || settingsSaving"
+                                class="settings-input"
+                                placeholder="例如 5"
+                                @focus="groupIdsInputFocused = true"
+                                @blur="handleGroupIdsBlur"
+                                @pressEnter="saveAutomationSettings"
+                            ></a-input>
+                        </div>
+
+                        <div class="setting-block">
+                            <div class="setting-copy">
+                                <div class="setting-title">代理 IP</div>
+                                <div class="setting-desc">开启后，仅 Codex OAuth 登录链路走此代理</div>
+                            </div>
+                            <a-switch
+                                v-model:checked="settings.proxy_enabled"
+                                :disabled="isRunning || settingsSaving"
+                                :loading="settingsSaving"
+                                @change="saveAutomationSettings"
+                            ></a-switch>
+                        </div>
+
+                        <div class="setting-field">
+                            <div class="setting-copy">
+                                <div class="setting-title">代理地址</div>
+                                <div class="setting-desc">填写代理 IP 与端口，例如 `127.0.0.1` / `7890`</div>
+                            </div>
+                            <div class="proxy-fields">
+                                <a-input
+                                    v-model:value="settings.proxy_host"
+                                    :disabled="isRunning || settingsSaving"
+                                    class="settings-input"
+                                    placeholder="IP"
+                                    @pressEnter="saveAutomationSettings"
+                                    @blur="saveAutomationSettings"
+                                ></a-input>
+                                <a-input
+                                    v-model:value="settings.proxy_port_text"
+                                    :disabled="isRunning || settingsSaving"
+                                    class="settings-input proxy-port-input"
+                                    inputmode="numeric"
+                                    placeholder="端口"
+                                    @pressEnter="saveAutomationSettings"
+                                    @blur="saveAutomationSettings"
+                                ></a-input>
+                            </div>
+                        </div>
+
+                        <div class="setting-footnote">
+                            {{ isRunning ? '任务运行中，暂时不能修改设置' : (settingsSaving ? '设置保存中...' : '空闲时可切换设置') }}
+                        </div>
+                    </a-card>
+
+                    <div class="drawer-link-grid">
+                        <a
+                            class="drawer-link-button"
+                            href="https://team.joini.cloud/admin/"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                        >
+                            Team管理
+                        </a>
+                        <a
+                            class="drawer-link-button"
+                            href="https://joini.cloud/"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                        >
+                            中转分发
+                        </a>
+                    </div>
+
+                    <a-button class="drawer-logout-action" danger block @click="handleLogout">
+                        <template #icon>
+                            <logout-outlined></logout-outlined>
+                        </template>
+                        退出
+                    </a-button>
+                </div>
+            </a-drawer>
+
             <aside class="sidebar">
                 <div class="brand-card">
                     <div class="brand-mark" aria-hidden="true">
@@ -236,46 +451,141 @@
                 </header>
 
                 <section v-if="currentTab === 'dashboard'" class="dashboard-page">
-                    <div class="stats-grid">
+                    <div class="stats-grid dashboard-summary-grid">
                         <a-card class="stat-card" :bordered="false">
                             <div class="stat-label">当前步骤</div>
                             <div class="stat-primary">{{ currentAction || '等待启动' }}</div>
                         </a-card>
                         <a-card class="stat-card" :bordered="false">
-                            <div class="stat-label">本次成功</div>
-                            <div class="stat-number success">{{ successCount }}</div>
-                        </a-card>
-                        <a-card class="stat-card" :bordered="false">
-                            <div class="stat-label">本次失败</div>
-                            <div class="stat-number danger">{{ failCount }}</div>
-                        </a-card>
-                        <a-card class="stat-card" :bordered="false">
                             <div class="stat-label">库存总数</div>
-                            <div class="stat-number accent">{{ totalInventory }}</div>
+                            <div class="stat-number accent">{{ dashboardStats.total || totalInventory }}</div>
+                        </a-card>
+                        <a-card class="stat-card" :bordered="false">
+                            <div class="stat-label">登录成功率</div>
+                            <div class="stat-number success">{{ formatDashboardRate(dashboardStats.login_success_rate) }}</div>
+                        </a-card>
+                        <a-card class="stat-card" :bordered="false">
+                            <div class="stat-label">待处理账号</div>
+                            <div class="stat-number warning">{{ dashboardStats.pending_accounts }}</div>
+                        </a-card>
+                        <a-card class="stat-card" :bordered="false">
+                            <div class="stat-label">异常账号</div>
+                            <div class="stat-number danger">{{ dashboardStats.failed_accounts }}</div>
                         </a-card>
                     </div>
 
-                    <div class="dashboard-grid">
-                        <a-card class="panel-card" :bordered="false">
+                    <div class="dashboard-insight-grid">
+                        <a-card class="panel-card dashboard-stat-panel" :bordered="false">
                             <template #title>
                                 <div class="card-title-inline">
-                                    <video-camera-outlined></video-camera-outlined>
-                                    <span>实时画面</span>
+                                    <bar-chart-outlined></bar-chart-outlined>
+                                    <span>核心统计</span>
                                 </div>
                             </template>
                             <template #extra>
-                                <a-tag :color="monitorStatusColor">{{ monitorStatusText }}</a-tag>
+                                <a-tag color="blue">本次 {{ successCount }} 成功 / {{ failCount }} 失败</a-tag>
                             </template>
 
-                            <div class="monitor-stage" :class="{ ready: !!monitorUrl }">
-                                <img v-if="monitorUrl" :src="monitorUrl" alt="实时画面" class="monitor-frame">
-                                <div v-else class="monitor-placeholder">
-                                    <monitor-outlined></monitor-outlined>
-                                    <span>{{ isRunning ? '等待首帧画面...' : '等待任务启动...' }}</span>
+                            <div class="dashboard-stat-blocks">
+                                <div class="dashboard-status-block">
+                                    <div class="dashboard-status-head">
+                                        <span>登录状态</span>
+                                        <strong>{{ dashboardStats.login.success }} / {{ dashboardStats.total }}</strong>
+                                    </div>
+                                    <div class="dashboard-meter">
+                                        <span class="meter-fill success" :style="{ width: `${getDashboardPercent(dashboardStats.login, 'success')}%` }"></span>
+                                        <span class="meter-fill warning" :style="{ width: `${getDashboardPercent(dashboardStats.login, 'pending')}%` }"></span>
+                                        <span class="meter-fill danger" :style="{ width: `${getDashboardPercent(dashboardStats.login, 'failed')}%` }"></span>
+                                    </div>
+                                    <div class="dashboard-status-meta">
+                                        <span>成功 {{ dashboardStats.login.success }}</span>
+                                        <span>待验证 {{ dashboardStats.login.pending }}</span>
+                                        <span>失败 {{ dashboardStats.login.failed }}</span>
+                                        <span>跳过 {{ dashboardStats.login.disabled }}</span>
+                                    </div>
+                                </div>
+
+                                <div class="dashboard-status-block">
+                                    <div class="dashboard-status-head">
+                                        <span>Sub2Api 状态</span>
+                                        <strong>{{ dashboardStats.sub2api.success }} / {{ dashboardStats.total }}</strong>
+                                    </div>
+                                    <div class="dashboard-meter">
+                                        <span class="meter-fill success" :style="{ width: `${getDashboardPercent(dashboardStats.sub2api, 'success')}%` }"></span>
+                                        <span class="meter-fill warning" :style="{ width: `${getDashboardPercent(dashboardStats.sub2api, 'pending')}%` }"></span>
+                                        <span class="meter-fill danger" :style="{ width: `${getDashboardPercent(dashboardStats.sub2api, 'failed')}%` }"></span>
+                                    </div>
+                                    <div class="dashboard-status-meta">
+                                        <span>已上传 {{ dashboardStats.sub2api.success }}</span>
+                                        <span>待上传 {{ dashboardStats.sub2api.pending }}</span>
+                                        <span>失败 {{ dashboardStats.sub2api.failed }}</span>
+                                        <span>未启用 {{ dashboardStats.sub2api.disabled }}</span>
+                                    </div>
+                                </div>
+
+                                <div class="dashboard-status-block">
+                                    <div class="dashboard-status-head">
+                                        <span>Team 管理（母号）</span>
+                                        <strong>{{ dashboardStats.team_manage.success }} / {{ dashboardStats.category.mother }}</strong>
+                                    </div>
+                                    <div class="dashboard-meter">
+                                        <span class="meter-fill success" :style="{ width: `${getDashboardPercent(dashboardStats.team_manage, 'success')}%` }"></span>
+                                        <span class="meter-fill warning" :style="{ width: `${getDashboardPercent(dashboardStats.team_manage, 'pending')}%` }"></span>
+                                        <span class="meter-fill danger" :style="{ width: `${getDashboardPercent(dashboardStats.team_manage, 'failed')}%` }"></span>
+                                    </div>
+                                    <div class="dashboard-status-meta">
+                                        <span>已上传 {{ dashboardStats.team_manage.success }}</span>
+                                        <span>待上传 {{ dashboardStats.team_manage.pending }}</span>
+                                        <span>失败 {{ dashboardStats.team_manage.failed }}</span>
+                                        <span>未启用 {{ dashboardStats.team_manage.disabled }}</span>
+                                    </div>
+                                </div>
+
+                                <div class="dashboard-category-strip">
+                                    <div>
+                                        <span>普号</span>
+                                        <strong>{{ dashboardStats.category.normal }}</strong>
+                                    </div>
+                                    <div>
+                                        <span>母号</span>
+                                        <strong>{{ dashboardStats.category.mother }}</strong>
+                                    </div>
                                 </div>
                             </div>
                         </a-card>
 
+                        <a-card class="panel-card dashboard-error-panel" :bordered="false">
+                            <template #title>
+                                <div class="card-title-inline">
+                                    <warning-outlined></warning-outlined>
+                                    <span>最近异常</span>
+                                </div>
+                            </template>
+                            <template #extra>
+                                <a-tag :color="dashboardStats.failed_accounts ? 'red' : 'green'">
+                                    {{ dashboardStats.failed_accounts ? `${dashboardStats.failed_accounts} 个异常` : '暂无异常' }}
+                                </a-tag>
+                            </template>
+
+                            <div class="recent-error-list">
+                                <template v-if="dashboardStats.recent_errors.length">
+                                    <div v-for="item in dashboardStats.recent_errors" :key="`${item.email}-${item.updatedAt}`" class="recent-error-item">
+                                        <div class="recent-error-main">
+                                            <div class="recent-error-email">{{ item.email }}</div>
+                                            <div class="recent-error-message">{{ item.message || '暂无错误详情' }}</div>
+                                        </div>
+                                        <div class="recent-error-side">
+                                            <a-tag color="red">{{ getDashboardErrorStatusText(item) }}</a-tag>
+                                            <span>{{ formatTimeCompact(item.updatedAt) }}</span>
+                                        </div>
+                                    </div>
+                                </template>
+                                <a-empty v-else :image="false" description="暂无异常账号"></a-empty>
+                            </div>
+                        </a-card>
+                    </div>
+
+                    <div class="dashboard-log-grid">
                         <a-card class="panel-card" :bordered="false">
                             <template #title>
                                 <div class="card-title-inline">
@@ -314,51 +624,79 @@
                                     </template>
                                 </a-input>
 
-                                <a-select
-                                    v-model:value="accountFilters.category"
-                                    class="toolbar-select"
-                                    @change="resetAccountPagination"
-                                >
-                                    <a-select-option value="all">分类：全部</a-select-option>
-                                    <a-select-option value="normal">分类：普号</a-select-option>
-                                    <a-select-option value="mother">分类：母号</a-select-option>
-                                </a-select>
+                                <div class="filter-field">
+                                    <span class="filter-field-label">分类</span>
+                                    <a-select
+                                        v-model:value="accountFilters.category"
+                                        class="toolbar-select filter-field-select"
+                                        popup-class-name="filter-select-dropdown"
+                                        dropdown-class-name="filter-select-dropdown"
+                                        :popup-match-select-width="false"
+                                        :dropdown-match-select-width="false"
+                                        @change="resetAccountPagination"
+                                    >
+                                        <a-select-option value="all">全部</a-select-option>
+                                        <a-select-option value="normal">普号</a-select-option>
+                                        <a-select-option value="mother">母号</a-select-option>
+                                    </a-select>
+                                </div>
 
-                                <a-select
-                                    v-model:value="accountFilters.login"
-                                    class="toolbar-select"
-                                    @change="resetAccountPagination"
-                                >
-                                    <a-select-option value="all">登录：全部</a-select-option>
-                                    <a-select-option value="pending">登录：待验证</a-select-option>
-                                    <a-select-option value="success">登录：成功</a-select-option>
-                                    <a-select-option value="failed">登录：失败</a-select-option>
-                                    <a-select-option value="disabled">登录：已跳过</a-select-option>
-                                </a-select>
+                                <div class="filter-field">
+                                    <span class="filter-field-label">登录</span>
+                                    <a-select
+                                        v-model:value="accountFilters.login"
+                                        class="toolbar-select filter-field-select"
+                                        popup-class-name="filter-select-dropdown"
+                                        dropdown-class-name="filter-select-dropdown"
+                                        :popup-match-select-width="false"
+                                        :dropdown-match-select-width="false"
+                                        @change="resetAccountPagination"
+                                    >
+                                        <a-select-option value="all">全部</a-select-option>
+                                        <a-select-option value="pending">待验证</a-select-option>
+                                        <a-select-option value="success">成功</a-select-option>
+                                        <a-select-option value="failed">失败</a-select-option>
+                                        <a-select-option value="disabled">已跳过</a-select-option>
+                                    </a-select>
+                                </div>
 
-                                <a-select
-                                    v-model:value="accountFilters.sub2api"
-                                    class="toolbar-select"
-                                    @change="resetAccountPagination"
-                                >
-                                    <a-select-option value="all">Sub2Api：全部</a-select-option>
-                                    <a-select-option value="success">Sub2Api：已上传</a-select-option>
-                                    <a-select-option value="pending">Sub2Api：待上传</a-select-option>
-                                    <a-select-option value="failed">Sub2Api：失败</a-select-option>
-                                    <a-select-option value="disabled">Sub2Api：未启用</a-select-option>
-                                </a-select>
+                                <div class="filter-field">
+                                    <span class="filter-field-label">Sub2Api</span>
+                                    <a-select
+                                        v-model:value="accountFilters.sub2api"
+                                        class="toolbar-select filter-field-select"
+                                        popup-class-name="filter-select-dropdown"
+                                        dropdown-class-name="filter-select-dropdown"
+                                        :popup-match-select-width="false"
+                                        :dropdown-match-select-width="false"
+                                        @change="resetAccountPagination"
+                                    >
+                                        <a-select-option value="all">全部</a-select-option>
+                                        <a-select-option value="success">已上传</a-select-option>
+                                        <a-select-option value="pending">待上传</a-select-option>
+                                        <a-select-option value="failed">失败</a-select-option>
+                                        <a-select-option value="disabled">未启用</a-select-option>
+                                    </a-select>
+                                </div>
 
-                                <a-select
-                                    v-model:value="accountFilters.teamManage"
-                                    class="toolbar-select"
-                                    @change="resetAccountPagination"
-                                >
-                                    <a-select-option value="all">Team：全部</a-select-option>
-                                    <a-select-option value="success">Team：已上传</a-select-option>
-                                    <a-select-option value="pending">Team：待上传</a-select-option>
-                                    <a-select-option value="failed">Team：失败</a-select-option>
-                                    <a-select-option value="disabled">Team：未启用</a-select-option>
-                                </a-select>
+                                <div class="filter-field">
+                                    <span class="filter-field-label">Team</span>
+                                    <a-select
+                                        v-model:value="accountFilters.teamManage"
+                                        class="toolbar-select filter-field-select"
+                                        popup-class-name="filter-select-dropdown"
+                                        dropdown-class-name="filter-select-dropdown"
+                                        :popup-match-select-width="false"
+                                        :dropdown-match-select-width="false"
+                                        @change="resetAccountPagination"
+                                    >
+                                        <a-select-option value="all">全部</a-select-option>
+                                        <a-select-option value="success">已上传</a-select-option>
+                                        <a-select-option value="pending">待上传</a-select-option>
+                                        <a-select-option value="failed">失败</a-select-option>
+                                        <a-select-option value="disabled">未启用</a-select-option>
+                                    </a-select>
+                                </div>
                             </div>
 
                             <div class="accounts-toolbar-side">
@@ -382,29 +720,49 @@
                                     @change="handleImportJsonFileChange"
                                 >
 
-                                <a-button
-                                    :loading="accountImporting"
-                                    :disabled="isRunning || accountsLoading"
-                                    @click="triggerImportJsonFile"
+                                <a-popover
+                                    trigger="click"
+                                    placement="bottomRight"
+                                    overlayClassName="toolbar-more-popover"
                                 >
-                                    <template #icon>
-                                        <upload-outlined></upload-outlined>
+                                    <template #content>
+                                        <div class="table-action-menu toolbar-more-menu">
+                                            <button
+                                                class="table-action-item toolbar-more-item"
+                                                :disabled="isRunning || accountsLoading || accountImporting"
+                                                @click="triggerImportJsonFile"
+                                            >
+                                                <upload-outlined></upload-outlined>
+                                                <span>{{ accountImporting ? '导入中...' : '导入 JSON' }}</span>
+                                            </button>
+                                            <button
+                                                class="table-action-item toolbar-more-item"
+                                                :disabled="accountsLoading || accountExporting"
+                                                @click="exportFilteredAccounts"
+                                            >
+                                                <download-outlined></download-outlined>
+                                                <span>{{ accountExporting ? '导出中...' : '导出当前筛选' }}</span>
+                                            </button>
+                                            <button
+                                                class="table-action-item toolbar-more-item"
+                                                :disabled="accountsLoading"
+                                                @click="loadAccounts"
+                                            >
+                                                <reload-outlined></reload-outlined>
+                                                <span>{{ accountsLoading ? '刷新中...' : '刷新列表' }}</span>
+                                            </button>
+                                        </div>
                                     </template>
-                                    导入 JSON
-                                </a-button>
 
-                                <a-button
-                                    :loading="accountExporting"
-                                    :disabled="accountsLoading"
-                                    @click="exportFilteredAccounts"
-                                >
-                                    <template #icon>
-                                        <download-outlined></download-outlined>
-                                    </template>
-                                    导出当前筛选
-                                </a-button>
+                                    <a-button class="desktop-more-action">
+                                        <template #icon>
+                                            <ellipsis-outlined></ellipsis-outlined>
+                                        </template>
+                                        更多
+                                    </a-button>
+                                </a-popover>
 
-                                <a-button :loading="accountsLoading" @click="loadAccounts">
+                                <a-button class="mobile-only-action" :loading="accountsLoading" @click="loadAccounts">
                                     <template #icon>
                                         <reload-outlined></reload-outlined>
                                     </template>
@@ -631,7 +989,7 @@
                                         v-if="hasAccountActions(record)"
                                         trigger="click"
                                         placement="leftTop"
-                                        overlayClassName="table-action-popover"
+                                        overlayClassName="table-action-popover desktop-table-action-popover"
                                         :open="isActionPopoverOpen(record)"
                                         @update:open="(open) => setActionPopoverOpen(record, open)"
                                     >
@@ -697,6 +1055,118 @@
                                 </template>
                             </template>
                         </a-table>
+
+                        <div class="mobile-account-list">
+                            <template v-if="pagedAccounts.length">
+                                <article v-for="record in pagedAccounts" :key="`mobile-${getAccountRowKey(record)}`" class="mobile-account-card">
+                                    <div class="mobile-account-head">
+                                        <div class="mobile-account-identity">
+                                            <a-tooltip placement="topLeft" overlayClassName="status-tooltip status-tooltip-info">
+                                                <template #title>
+                                                    <div class="status-tooltip-content">{{ record.email }}</div>
+                                                </template>
+                                                <button
+                                                    type="button"
+                                                    class="mobile-account-email"
+                                                    @click.stop="copyText(record.email, '账号')"
+                                                >
+                                                    {{ formatEmailCompact(record.email) }}
+                                                </button>
+                                            </a-tooltip>
+                                            <div class="mobile-account-time">{{ formatTimeCompact(record.time) }}</div>
+                                        </div>
+                                        <a-tag class="status-tag-pill" :color="record.isMotherAccount ? 'purple' : 'blue'">
+                                            {{ record.accountCategoryLabel || '普号' }}
+                                        </a-tag>
+                                    </div>
+
+                                    <div class="mobile-account-status-row">
+                                        <a-tag class="status-tag-pill mobile-status-badge" :color="getPrimaryTagColor(record)">
+                                            <span class="mobile-status-badge-label">登录</span>
+                                            <span class="mobile-status-badge-text">
+                                                {{ getPrimaryStatusLabel(record) }}
+                                            </span>
+                                        </a-tag>
+                                        <a-tag class="status-tag-pill mobile-status-badge" :color="getSub2ApiTagColor(record)">
+                                            <span class="mobile-status-badge-label">S2</span>
+                                            <span class="mobile-status-badge-text">
+                                                {{ record.sub2apiStatus || '未上传' }}
+                                            </span>
+                                        </a-tag>
+                                        <a-tag class="status-tag-pill mobile-status-badge" :color="getTeamManageTagColor(record)">
+                                            <span class="mobile-status-badge-label">Team</span>
+                                            <span class="mobile-status-badge-text">
+                                                {{ record.teamManageStatus || '未上传' }}
+                                            </span>
+                                        </a-tag>
+                                    </div>
+
+                                    <div v-if="getPrimaryStatusReason(record) || getSub2ApiReason(record) || getTeamManageReason(record)" class="mobile-account-reason">
+                                        {{ getPrimaryStatusReason(record) || getSub2ApiReason(record) || getTeamManageReason(record) }}
+                                    </div>
+
+                                    <div class="mobile-account-actions">
+                                        <a-button @click.stop="copyText(record.password, '密码')">复制密码</a-button>
+                                        <a-popover
+                                            v-if="hasAccountActions(record)"
+                                            trigger="click"
+                                            placement="topRight"
+                                            overlayClassName="table-action-popover mobile-card-action-popover"
+                                            :open="isActionPopoverOpen(record)"
+                                            @update:open="(open) => setActionPopoverOpen(record, open)"
+                                        >
+                                            <template #content>
+                                                <div class="table-action-menu">
+                                                    <button
+                                                        class="table-action-item"
+                                                        :disabled="!record.canLoginSub2api"
+                                                        @click="handleAccountActionMenu('loginSub2Api', record)"
+                                                    >
+                                                        登录并上传
+                                                    </button>
+                                                    <button
+                                                        class="table-action-item"
+                                                        :disabled="!record.canUploadExistingToken"
+                                                        @click="handleAccountActionMenu('uploadSub2Api', record)"
+                                                    >
+                                                        补传Sub2
+                                                    </button>
+                                                    <button
+                                                        class="table-action-item"
+                                                        :disabled="!record.canUploadTeamManage"
+                                                        @click="handleAccountActionMenu('uploadTeamManage', record)"
+                                                    >
+                                                        上传 Team 管理
+                                                    </button>
+                                                    <button
+                                                        class="table-action-item"
+                                                        @click="handleAccountActionMenu('exportAccount', record)"
+                                                    >
+                                                        导出该账号
+                                                    </button>
+                                                    <button
+                                                        class="table-action-item table-action-item-danger"
+                                                        :disabled="!record.canDeleteAccount"
+                                                        @click="handleAccountActionMenu('deleteAccount', record)"
+                                                    >
+                                                        删除账号
+                                                    </button>
+                                                </div>
+                                            </template>
+
+                                            <a-button
+                                                type="primary"
+                                                class="toolbar-primary-button"
+                                                :loading="isAnyAccountActionRunning(record)"
+                                            >
+                                                操作
+                                            </a-button>
+                                        </a-popover>
+                                    </div>
+                                </article>
+                            </template>
+                            <a-empty v-else :image="false" description="暂无匹配账号"></a-empty>
+                        </div>
 
                         <div class="accounts-footer">
                             <div class="accounts-summary">

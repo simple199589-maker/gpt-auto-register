@@ -28,6 +28,7 @@ function registerAntComponents(appInstance) {
         ['ATooltip', antNamespace.Tooltip || (antPlugin && antPlugin.Tooltip)],
         ['APopover', antNamespace.Popover || (antPlugin && antPlugin.Popover)],
         ['AModal', antNamespace.Modal || (antPlugin && antPlugin.Modal)],
+        ['ADrawer', antNamespace.Drawer || (antPlugin && antPlugin.Drawer)],
         ['ARadioGroup', (radioComponent && radioComponent.Group) || antNamespace.RadioGroup],
         ['ARadio', radioComponent],
         ['ACheckboxGroup', (checkboxComponent && checkboxComponent.Group) || antNamespace.CheckboxGroup],
@@ -213,10 +214,18 @@ const app = createApp({
         const logs = ref([])
         const logIndex = ref(0)
         const pollTimer = ref(null)
-        const monitorUrl = ref('')
-        const hasFrame = ref(false)
-        const frameVersion = ref(-1)
-        const isStreamingMonitor = ref(false)
+        const mobileMenuOpen = ref(false)
+        const dashboardStats = reactive({
+            total: 0,
+            category: { normal: 0, mother: 0 },
+            login: { pending: 0, success: 0, failed: 0, disabled: 0 },
+            sub2api: { pending: 0, success: 0, failed: 0, disabled: 0 },
+            team_manage: { pending: 0, success: 0, failed: 0, disabled: 0 },
+            pending_accounts: 0,
+            failed_accounts: 0,
+            login_success_rate: 0,
+            recent_errors: []
+        })
         const settingsSaving = ref(false)
         const groupIdsInputFocused = ref(false)
         const accountsLoading = ref(false)
@@ -318,29 +327,6 @@ const app = createApp({
             return params
         }
 
-        const monitorStatusText = computed(() => {
-            if (isRunning.value) {
-                return hasFrame.value ? 'LIVE' : 'SYNCING'
-            }
-            if (monitorUrl.value) {
-                return 'IDLE'
-            }
-            return 'OFFLINE'
-        })
-
-        const monitorStatusColor = computed(() => {
-            if (isRunning.value && hasFrame.value) {
-                return 'green'
-            }
-            if (isRunning.value) {
-                return 'blue'
-            }
-            if (monitorUrl.value) {
-                return 'gold'
-            }
-            return 'default'
-        })
-
         function syncSettings(data) {
             serverSettings.sub2api_auto_upload_enabled = Boolean(data && data.sub2api_auto_upload_enabled)
             serverSettings.sub2api_group_ids = Array.isArray(data && data.sub2api_group_ids)
@@ -387,27 +373,37 @@ const app = createApp({
             settings.proxy_port_text = serverSettings.proxy_port ? String(serverSettings.proxy_port) : ''
         }
 
-        function updateMonitorState(data) {
-            hasFrame.value = Boolean(data && data.has_frame)
-            frameVersion.value = Number.isInteger(data && data.frame_version) ? data.frame_version : -1
+        /**
+         * 同步统计中心数据。
+         *
+         * @author AI by zb
+         */
+        function syncDashboardStats(rawStats) {
+            const stats = rawStats || {}
+            const category = stats.category || {}
+            const login = stats.login || {}
+            const sub2api = stats.sub2api || {}
+            const teamManage = stats.team_manage || {}
 
-            if (isRunning.value || hasFrame.value) {
-                if (isRunning.value) {
-                    if (!isStreamingMonitor.value || !includesAnyKeyword(monitorUrl.value, '/video_feed')) {
-                        monitorUrl.value = `/video_feed?ts=${Date.now()}`
-                        isStreamingMonitor.value = true
-                    }
-                } else {
-                    isStreamingMonitor.value = false
-                    if (hasFrame.value) {
-                        monitorUrl.value = `/api/frame?v=${frameVersion.value}`
-                    }
-                }
-                return
-            }
-
-            monitorUrl.value = ''
-            isStreamingMonitor.value = false
+            dashboardStats.total = Number(stats.total || 0)
+            dashboardStats.category.normal = Number(category.normal || 0)
+            dashboardStats.category.mother = Number(category.mother || 0)
+            dashboardStats.login.pending = Number(login.pending || 0)
+            dashboardStats.login.success = Number(login.success || 0)
+            dashboardStats.login.failed = Number(login.failed || 0)
+            dashboardStats.login.disabled = Number(login.disabled || 0)
+            dashboardStats.sub2api.pending = Number(sub2api.pending || 0)
+            dashboardStats.sub2api.success = Number(sub2api.success || 0)
+            dashboardStats.sub2api.failed = Number(sub2api.failed || 0)
+            dashboardStats.sub2api.disabled = Number(sub2api.disabled || 0)
+            dashboardStats.team_manage.pending = Number(teamManage.pending || 0)
+            dashboardStats.team_manage.success = Number(teamManage.success || 0)
+            dashboardStats.team_manage.failed = Number(teamManage.failed || 0)
+            dashboardStats.team_manage.disabled = Number(teamManage.disabled || 0)
+            dashboardStats.pending_accounts = Number(stats.pending_accounts || 0)
+            dashboardStats.failed_accounts = Number(stats.failed_accounts || 0)
+            dashboardStats.login_success_rate = Number(stats.login_success_rate || 0)
+            dashboardStats.recent_errors = Array.isArray(stats.recent_errors) ? stats.recent_errors : []
         }
 
         async function pollStatus() {
@@ -421,7 +417,7 @@ const app = createApp({
                 lastUpdate.value = new Date().toLocaleTimeString()
 
                 syncSettings(data)
-                updateMonitorState(data)
+                syncDashboardStats(data && data.dashboard_stats)
 
                 if (Array.isArray(data && data.logs) && data.logs.length) {
                     logs.value.push(...data.logs)
@@ -1260,6 +1256,7 @@ const app = createApp({
 
         function handleMenuClick({ key }) {
             currentTab.value = key
+            mobileMenuOpen.value = false
         }
 
         function resetAccountPagination() {
@@ -1395,6 +1392,62 @@ const app = createApp({
             return getLoginTagColor(record)
         }
 
+        /**
+         * 计算统计分组总量。
+         *
+         * @author AI by zb
+         */
+        function getDashboardGroupTotal(group) {
+            const stats = group || {}
+            return ['pending', 'success', 'failed', 'disabled']
+                .map((key) => Number(stats[key] || 0))
+                .reduce((total, value) => total + value, 0)
+        }
+
+        /**
+         * 计算统计分组状态占比。
+         *
+         * @author AI by zb
+         */
+        function getDashboardPercent(group, key) {
+            const total = getDashboardGroupTotal(group)
+            if (!total) {
+                return 0
+            }
+            return Math.round(Number(group && group[key] || 0) * 100 / total)
+        }
+
+        /**
+         * 格式化统计中心成功率。
+         *
+         * @author AI by zb
+         */
+        function formatDashboardRate(value) {
+            const rate = Number(value || 0)
+            return `${Number.isInteger(rate) ? rate : rate.toFixed(1)}%`
+        }
+
+        /**
+         * 生成最近异常的状态摘要。
+         *
+         * @author AI by zb
+         */
+        function getDashboardErrorStatusText(item) {
+            if (!item) {
+                return '状态异常'
+            }
+            if (item.loginState === 'failed') {
+                return '登录失败'
+            }
+            if (item.sub2apiState === 'failed') {
+                return 'Sub2Api 失败'
+            }
+            if (item.teamManageState === 'failed') {
+                return 'Team 失败'
+            }
+            return '状态异常'
+        }
+
         watch(
             () => [accountFilters.keyword, accountFilters.category, accountFilters.login, accountFilters.sub2api, accountFilters.teamManage],
             () => {
@@ -1458,13 +1511,17 @@ const app = createApp({
             currentTab,
             copyText,
             closeManualAccountPanel,
+            dashboardStats,
             exportFilteredAccounts,
             failCount,
             getAccountRowKey,
             getActionPopoverKey,
+            formatDashboardRate,
             formatEmailCompact,
             formatPasswordCompact,
             formatTimeCompact,
+            getDashboardErrorStatusText,
+            getDashboardPercent,
             getOverallTagColor,
             getOverallReason,
             getOverallStatusTone,
@@ -1513,9 +1570,7 @@ const app = createApp({
             logs,
             manualAccountForm,
             manualAccountSubmitting,
-            monitorStatusColor,
-            monitorStatusText,
-            monitorUrl,
+            mobileMenuOpen,
             pageSizeOptions,
             pagedAccounts,
             paginationTotalText,

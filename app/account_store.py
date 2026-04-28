@@ -1017,6 +1017,134 @@ def count_account_records() -> int:
         return int(row["total"] if row else 0)
 
 
+def _empty_status_counts() -> dict:
+    """
+    创建核心状态统计默认结构。
+
+    返回:
+        dict: pending/success/failed/disabled 零值统计
+        AI by zb
+    """
+    return {"pending": 0, "success": 0, "failed": 0, "disabled": 0}
+
+
+def _increment_status_count(counts: dict, status: Any) -> None:
+    """
+    将状态写入统计桶。
+
+    参数:
+        counts: 统计桶
+        status: 原始状态值
+    返回:
+        None
+        AI by zb
+    """
+    normalized = str(status or "pending").strip().lower()
+    if normalized not in counts:
+        normalized = "pending"
+    counts[normalized] += 1
+
+
+def _resolve_dashboard_error(record: dict) -> str:
+    """
+    提取统计中心最近异常文案。
+
+    参数:
+        record: 标准化账号记录
+    返回:
+        str: 异常说明
+        AI by zb
+    """
+    if record.get("loginState") == "failed":
+        return str(record.get("loginMessage") or record.get("lastError") or record.get("status") or "登录失败")
+    if record.get("sub2apiState") == "failed":
+        return str(record.get("sub2apiMessage") or record.get("lastError") or record.get("sub2apiStatus") or "Sub2Api 上传失败")
+    if record.get("teamManageState") == "failed":
+        return str(record.get("teamManageMessage") or record.get("lastError") or record.get("teamManageStatus") or "Team 上传失败")
+    if record.get("overallStatus") == "failed":
+        return str(record.get("lastError") or record.get("status") or "账号状态异常")
+    return ""
+
+
+def build_account_dashboard_stats(limit_recent_errors: int = 5) -> dict:
+    """
+    构建统计中心核心账号指标。
+
+    参数:
+        limit_recent_errors: 最近异常返回数量
+    返回:
+        dict: 仪表盘统计数据
+        AI by zb
+    """
+    ensure_account_store()
+    limit_recent_errors = max(int(limit_recent_errors or 5), 0)
+    stats = {
+        "total": 0,
+        "category": {"normal": 0, "mother": 0},
+        "login": _empty_status_counts(),
+        "sub2api": _empty_status_counts(),
+        "team_manage": _empty_status_counts(),
+        "pending_accounts": 0,
+        "failed_accounts": 0,
+        "login_success_rate": 0,
+        "recent_errors": [],
+    }
+
+    with _connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT * FROM accounts
+            ORDER BY updated_at DESC, email DESC
+            """
+        ).fetchall()
+
+    for row in rows:
+        record = _row_to_record(row)
+        stats["total"] += 1
+
+        category = str(record.get("accountCategory") or "normal")
+        if category not in stats["category"]:
+            category = "normal"
+        stats["category"][category] += 1
+
+        login_state = str(record.get("loginState") or "pending")
+        sub2api_state = str(record.get("sub2apiState") or "pending")
+        team_manage_state = str(record.get("teamManageState") or "pending")
+        overall_state = str(record.get("overallStatus") or "pending")
+        team_manage_applicable = category == "mother"
+        states = [login_state, sub2api_state]
+        if team_manage_applicable:
+            states.append(team_manage_state)
+
+        _increment_status_count(stats["login"], login_state)
+        _increment_status_count(stats["sub2api"], sub2api_state)
+        if team_manage_applicable:
+            _increment_status_count(stats["team_manage"], team_manage_state)
+
+        if "pending" in states:
+            stats["pending_accounts"] += 1
+        if "failed" in states or overall_state == "failed":
+            stats["failed_accounts"] += 1
+            if len(stats["recent_errors"]) < limit_recent_errors:
+                stats["recent_errors"].append(
+                    {
+                        "email": record.get("email", ""),
+                        "accountCategory": category,
+                        "accountCategoryLabel": "母号" if category == "mother" else "普号",
+                        "message": _resolve_dashboard_error(record),
+                        "updatedAt": record.get("updatedAt", ""),
+                        "loginState": login_state,
+                        "sub2apiState": sub2api_state,
+                        "teamManageState": team_manage_state,
+                    }
+                )
+
+    if stats["total"]:
+        stats["login_success_rate"] = round(stats["login"]["success"] * 100 / stats["total"], 1)
+
+    return stats
+
+
 def load_account_records() -> list[dict]:
     """
     读取全部账号记录。

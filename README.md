@@ -42,6 +42,8 @@ docker compose build
 docker compose up -d
 ```
 
+线上已经部署过 Docker Compose 时，按 [生产更新方案](docs/docker-deploy.md#生产更新方案) 执行备份、拉取代码、重建容器、健康检查和回滚。
+
 首次启动会自动生成 `/data/gpt-auto-register/config.yaml`。修改该文件中的邮箱、Sub2Api、代理等配置后重启：
 
 ```yaml

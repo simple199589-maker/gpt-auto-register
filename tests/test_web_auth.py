@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 class WebAuthTests(unittest.TestCase):
@@ -52,6 +53,30 @@ class WebAuthTests(unittest.TestCase):
         self.assertTrue(login_response.get_json()["success"])
         self.assertTrue(status_response.get_json()["authenticated"])
         self.assertEqual(api_response.status_code, 200)
+
+    def test_status_includes_dashboard_stats_after_login(self) -> None:
+        """状态接口应返回统计中心核心指标。AI by zb"""
+        expected_stats = {
+            "total": 2,
+            "category": {"normal": 1, "mother": 1},
+            "login": {"pending": 0, "success": 1, "failed": 1, "disabled": 0},
+            "sub2api": {"pending": 1, "success": 1, "failed": 0, "disabled": 0},
+            "team_manage": {"pending": 1, "success": 0, "failed": 1, "disabled": 0},
+            "pending_accounts": 1,
+            "failed_accounts": 1,
+            "login_success_rate": 50,
+            "recent_errors": [{"email": "failed@example.com", "message": "登录失败"}],
+        }
+
+        with (
+            patch.object(self.web_server, "count_account_records", return_value=2),
+            patch.object(self.web_server, "build_account_dashboard_stats", return_value=expected_stats),
+        ):
+            self.client.post("/api/auth/login", json={"password": "secret-pass"})
+            response = self.client.get("/api/status")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["dashboard_stats"], expected_stats)
 
     def test_logout_clears_authentication(self) -> None:
         """退出登录后应重新拦截 API 访问。AI by zb"""

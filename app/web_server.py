@@ -22,7 +22,7 @@ import app.plus_activation_api as plus_activation_api
 import app.plus_binding as plus_binding
 import app.account_actions as account_actions
 import app.login_sub2api as login_sub2api
-from app.account_store import count_account_records, query_account_records, upsert_account_record
+from app.account_store import build_account_dashboard_stats, count_account_records, query_account_records, upsert_account_record
 from app.config import cfg, select_activation_api_base_url, update_automation_settings
 from app.utils import get_account_record, parse_account_record, sanitize_account_record_for_web
 
@@ -1146,9 +1146,24 @@ def index():
 @app.route('/api/status')
 def get_status():
     try:
-        total_inventory = count_account_records()
+        dashboard_stats = build_account_dashboard_stats()
+        total_inventory = int(dashboard_stats.get("total") or 0)
     except Exception:
-        total_inventory = 0
+        dashboard_stats = {
+            "total": 0,
+            "category": {"normal": 0, "mother": 0},
+            "login": {"pending": 0, "success": 0, "failed": 0, "disabled": 0},
+            "sub2api": {"pending": 0, "success": 0, "failed": 0, "disabled": 0},
+            "team_manage": {"pending": 0, "success": 0, "failed": 0, "disabled": 0},
+            "pending_accounts": 0,
+            "failed_accounts": 0,
+            "login_success_rate": 0,
+            "recent_errors": [],
+        }
+        try:
+            total_inventory = count_account_records()
+        except Exception:
+            total_inventory = 0
 
     return jsonify({
         "is_running": state.is_running,
@@ -1156,6 +1171,7 @@ def get_status():
         "success": state.success_count,
         "fail": state.fail_count,
         "total_inventory": total_inventory,
+        "dashboard_stats": dashboard_stats,
         **build_automation_settings_payload(),
         "has_frame": state.get_frame() is not None,
         "frame_version": state.get_frame_version(),
