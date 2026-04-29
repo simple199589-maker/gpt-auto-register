@@ -101,12 +101,16 @@ def _normalize_account_category(value: str) -> str:
     参数:
         value: 原始分类
     返回:
-        str: `normal/mother`
+        str: `normal/mother/plus/pro`
         AI by zb
     """
     normalized = str(value or "").strip().lower()
     if normalized in {"mother", "母号", "team"}:
         return "mother"
+    if normalized in {"plus"}:
+        return "plus"
+    if normalized in {"pro"}:
+        return "pro"
     return "normal"
 
 

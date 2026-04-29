@@ -550,6 +550,14 @@
                                         <span>母号</span>
                                         <strong>{{ dashboardStats.category.mother }}</strong>
                                     </div>
+                                    <div>
+                                        <span>Plus</span>
+                                        <strong>{{ dashboardStats.category.plus }}</strong>
+                                    </div>
+                                    <div>
+                                        <span>Pro</span>
+                                        <strong>{{ dashboardStats.category.pro }}</strong>
+                                    </div>
                                 </div>
                             </div>
                         </a-card>
@@ -638,6 +646,8 @@
                                         <a-select-option value="all">全部</a-select-option>
                                         <a-select-option value="normal">普号</a-select-option>
                                         <a-select-option value="mother">母号</a-select-option>
+                                        <a-select-option value="plus">Plus</a-select-option>
+                                        <a-select-option value="pro">Pro</a-select-option>
                                     </a-select>
                                 </div>
 
@@ -793,14 +803,13 @@
 
                                 <div class="manual-account-field">
                                     <div class="field-label">账号密码</div>
-                                    <a-input
+                                    <a-input-password
                                         v-model:value="manualAccountForm.password"
                                         allow-clear
                                         :disabled="isRunning || manualAccountSubmitting"
-                                        type="password"
                                         placeholder="必填"
                                         @pressEnter="submitManualAccount"
-                                    ></a-input>
+                                    ></a-input-password>
                                 </div>
 
                                 <div class="manual-account-field">
@@ -811,6 +820,8 @@
                                     >
                                         <a-select-option value="normal">普号</a-select-option>
                                         <a-select-option value="mother">母号</a-select-option>
+                                        <a-select-option value="plus">Plus</a-select-option>
+                                        <a-select-option value="pro">Pro</a-select-option>
                                     </a-select>
                                 </div>
                             </div>

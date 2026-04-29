@@ -74,7 +74,7 @@ ALLOWED_REGISTRATION_STATES = {"pending", "success", "failed"}
 ALLOWED_LOGIN_STATES = {"pending", "success", "failed", "disabled"}
 ALLOWED_PLUS_STATES = {"idle", "pending", "success", "failed", "disabled"}
 ALLOWED_SUB2API_STATES = {"pending", "success", "failed", "disabled"}
-ALLOWED_ACCOUNT_CATEGORIES = {"normal", "mother"}
+ALLOWED_ACCOUNT_CATEGORIES = {"normal", "mother", "plus", "pro"}
 ALLOWED_TEAM_MANAGE_STATES = {"pending", "success", "failed", "disabled"}
 SCHEMA_VERSION = "4"
 
@@ -205,7 +205,7 @@ def _normalize_account_category(value: Any) -> str:
     参数:
         value: 原始分类
     返回:
-        str: `normal/mother`
+        str: `normal/mother/plus/pro`
         AI by zb
     """
     normalized = str(value or "").strip().lower()
@@ -216,6 +216,8 @@ def _normalize_account_category(value: Any) -> str:
         "mother": "mother",
         "母号": "mother",
         "team": "mother",
+        "plus": "plus",
+        "pro": "pro",
     }
     return aliases.get(normalized, "normal")
 
@@ -1066,6 +1068,25 @@ def _resolve_dashboard_error(record: dict) -> str:
     return ""
 
 
+def _get_account_category_label(category: str) -> str:
+    """
+    获取账号分类的中文标签。
+
+    参数:
+        category: 分类值
+    返回:
+        str: 中文标签
+        AI by zb
+    """
+    category_map = {
+        "normal": "普号",
+        "mother": "母号",
+        "plus": "Plus",
+        "pro": "Pro",
+    }
+    return category_map.get(category, "普号")
+
+
 def build_account_dashboard_stats(limit_recent_errors: int = 5) -> dict:
     """
     构建统计中心核心账号指标。
@@ -1080,7 +1101,7 @@ def build_account_dashboard_stats(limit_recent_errors: int = 5) -> dict:
     limit_recent_errors = max(int(limit_recent_errors or 5), 0)
     stats = {
         "total": 0,
-        "category": {"normal": 0, "mother": 0},
+        "category": {"normal": 0, "mother": 0, "plus": 0, "pro": 0},
         "login": _empty_status_counts(),
         "sub2api": _empty_status_counts(),
         "team_manage": _empty_status_counts(),
@@ -1130,7 +1151,7 @@ def build_account_dashboard_stats(limit_recent_errors: int = 5) -> dict:
                     {
                         "email": record.get("email", ""),
                         "accountCategory": category,
-                        "accountCategoryLabel": "母号" if category == "mother" else "普号",
+                        "accountCategoryLabel": _get_account_category_label(category),
                         "message": _resolve_dashboard_error(record),
                         "updatedAt": record.get("updatedAt", ""),
                         "loginState": login_state,
@@ -1359,7 +1380,9 @@ def query_account_records(
     params: list[Any] = []
 
     keyword = str(keyword or "").strip()
-    account_category = _normalize_account_category(account_category) if str(account_category or "").strip() else ""
+    account_category_raw = str(account_category or "").strip().lower()
+    # 直接判断是否在允许的分类列表中，不进行过度规范化
+    account_category = account_category_raw if account_category_raw in ALLOWED_ACCOUNT_CATEGORIES else ""
     registration_status = str(registration_status or "").strip().lower()
     overall_status = str(overall_status or "").strip().lower()
     plus_status = str(plus_status or "").strip().lower()
@@ -1387,7 +1410,7 @@ def query_account_records(
         pattern = f"%{keyword.lower()}%"
         params.extend([pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern])
 
-    if account_category in ALLOWED_ACCOUNT_CATEGORIES:
+    if account_category:
         where_clauses.append("account_category = ?")
         params.append(account_category)
 
@@ -1469,7 +1492,7 @@ def sanitize_account_record_for_web(record: dict) -> dict:
         "email": normalized.get("email", ""),
         "password": normalized.get("password", ""),
         "accountCategory": account_category,
-        "accountCategoryLabel": "母号" if is_mother_account else "普号",
+        "accountCategoryLabel": _get_account_category_label(account_category),
         "isMotherAccount": is_mother_account,
         "status": normalized.get("status", ""),
         "time": normalized.get("time", ""),
