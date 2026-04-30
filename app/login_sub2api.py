@@ -260,6 +260,7 @@ def import_login_account(
     password: str,
     mailbox_context: str = "",
     account_category: str = "normal",
+    remark: str = "",
 ) -> dict:
     """
     导入待登录验证账号。
@@ -269,6 +270,7 @@ def import_login_account(
         password: 账号密码
         mailbox_context: 可选邮箱接码上下文
         account_category: 账号分类
+        remark: 备注
     返回:
         dict: 写入后的账号记录
         AI by zb
@@ -311,6 +313,7 @@ def import_login_account(
             "teamManageUploadedAt": "",
             "overallStatus": "pending",
             "lastError": "",
+            "remark": str(remark or current.get("remark") or "").strip(),
         },
     )
 

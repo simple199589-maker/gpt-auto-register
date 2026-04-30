@@ -241,8 +241,11 @@ const app = createApp({
         const manualAccountForm = reactive({
             email: '',
             password: '',
-            accountCategory: 'normal'
+            accountCategory: 'normal',
+            remark: ''
         })
+        const accountDetailModalOpen = ref(false)
+        const accountDetailRecord = ref(null)
         const loginUploadModalOpen = ref(false)
         const loginUploadRecord = ref(null)
         const loginUploadSubmitting = ref(false)
@@ -755,6 +758,7 @@ const app = createApp({
             manualAccountForm.email = ''
             manualAccountForm.password = ''
             manualAccountForm.accountCategory = 'normal'
+            manualAccountForm.remark = ''
         }
 
         /**
@@ -789,6 +793,7 @@ const app = createApp({
             const email = String(manualAccountForm.email || '').trim().toLowerCase()
             const password = String(manualAccountForm.password || '').trim()
             const accountCategory = String(manualAccountForm.accountCategory || 'normal').trim()
+            const remark = String(manualAccountForm.remark || '').trim()
 
             if (!email) {
                 showError('请输入账号邮箱')
@@ -804,7 +809,7 @@ const app = createApp({
                 const data = await requestJson('/api/accounts/import', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email, password, account_category: accountCategory })
+                    body: JSON.stringify({ email, password, account_category: accountCategory, remark })
                 })
 
                 showSuccess(data && data.message ? data.message : '账号已导入')
@@ -1224,6 +1229,10 @@ const app = createApp({
             }
             setActionPopoverOpen(record, false)
 
+            if (actionKey === 'viewDetail') {
+                openAccountDetailModal(record)
+                return
+            }
             if (actionKey === 'loginSub2Api') {
                 await handleLoginSub2Api(record)
                 return
@@ -1244,6 +1253,73 @@ const app = createApp({
                 await handleDeleteAccount(record)
             }
         }
+
+        /**
+         * 打开账号详情弹窗。
+         *
+         * @author AI by zb
+         */
+        function openAccountDetailModal(record) {
+            if (!record || !record.email) {
+                return
+            }
+            accountDetailRecord.value = record
+            accountDetailModalOpen.value = true
+        }
+
+        /**
+         * 关闭账号详情弹窗。
+         *
+         * @author AI by zb
+         */
+        function closeAccountDetailModal() {
+            accountDetailModalOpen.value = false
+            accountDetailRecord.value = null
+        }
+
+        /**
+         * 构建账号详情弹窗分区数据。
+         *
+         * @author AI by zb
+         */
+        const accountDetailSections = computed(() => {
+            const r = accountDetailRecord.value
+            if (!r) return []
+            const oauth = r.oauthTokens || r.hasOAuthTokens ? null : null
+            return [
+                {
+                    title: '基本信息',
+                    fields: [
+                        { key: 'email', label: '邮箱', value: r.email },
+                        { key: 'password', label: '密码', value: r.password },
+                        { key: 'category', label: '分类', value: r.accountCategoryLabel },
+                        { key: 'remark', label: '备注', value: r.remark },
+                    ].filter(f => f.value)
+                },
+                {
+                    title: '登录状态',
+                    fields: [
+                        { key: 'loginState', label: '登录状态', value: r.loginState === 'success' ? '成功' : r.loginState === 'failed' ? '失败' : '待验证' },
+                        { key: 'loginMessage', label: '登录信息', value: r.loginMessage },
+                        { key: 'loginVerifiedAt', label: '验证时间', value: r.loginVerifiedAt ? formatTimeCompact(r.loginVerifiedAt) : '' },
+                    ].filter(f => f.value)
+                },
+                {
+                    title: 'Sub2Api',
+                    fields: [
+                        { key: 'sub2apiState', label: '状态', value: r.sub2apiState === 'success' ? '已上传' : r.sub2apiState === 'failed' ? '失败' : r.sub2apiState === 'disabled' ? '未启用' : '待上传' },
+                        { key: 'sub2apiMessage', label: '信息', value: r.sub2apiMessage },
+                    ].filter(f => f.value)
+                },
+                {
+                    title: 'Team 管理',
+                    fields: [
+                        { key: 'teamManageState', label: '状态', value: r.teamManageState === 'success' ? '已上传' : r.teamManageState === 'failed' ? '失败' : r.teamManageState === 'disabled' ? '未启用' : '待上传' },
+                        { key: 'teamManageMessage', label: '信息', value: r.teamManageMessage },
+                    ].filter(f => f.value)
+                },
+            ].filter(s => s.fields.length > 0)
+        })
 
         async function handleLogout() {
             try {
@@ -1593,7 +1669,12 @@ const app = createApp({
             toggleManualAccountPanel,
             totalAccountPages,
             totalInventory,
-            triggerImportJsonFile
+            triggerImportJsonFile,
+            accountDetailModalOpen,
+            accountDetailRecord,
+            accountDetailSections,
+            closeAccountDetailModal,
+            openAccountDetailModal
         }
     }
 })

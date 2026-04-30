@@ -524,6 +524,32 @@ plus_activation_api.print = hooked_print
 plus_binding.print = hooked_print
 account_actions.print = hooked_print
 
+
+class WebLogHandler(logging.Handler):
+    """
+    将 logging 日志桥接到 Web 终端日志。
+
+    AI by zb
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+            state.add_log(msg)
+        except Exception:
+            pass
+
+
+_web_log_handler = WebLogHandler()
+_web_log_handler.setFormatter(
+    logging.Formatter("%(asctime)s | %(levelname)s | %(message)s", datefmt="%H:%M:%S")
+)
+
+for _logger_name in ("codex-login", "team-manage", "login-sub2api", "sub2api"):
+    _logger = logging.getLogger(_logger_name)
+    _logger.addHandler(_web_log_handler)
+    _logger.setLevel(logging.INFO)
+
 # ==========================================
 # 🧵 后台工作线程
 # ==========================================
@@ -1326,6 +1352,7 @@ def create_account_manually():
     account_category = str(
         data.get("accountCategory") or data.get("account_category") or "normal"
     ).strip().lower()
+    remark = str(data.get("remark") or "").strip()
 
     previous_action = state.current_action
     state.current_action = f"导入账号: {email or '未命名'}"
@@ -1335,6 +1362,7 @@ def create_account_manually():
             password=password,
             mailbox_context=mailbox_context,
             account_category=account_category,
+            remark=remark,
         )
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400

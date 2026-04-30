@@ -824,6 +824,17 @@
                                         <a-select-option value="pro">Pro</a-select-option>
                                     </a-select>
                                 </div>
+
+                                <div class="manual-account-field">
+                                    <div class="field-label">备注</div>
+                                    <a-input
+                                        v-model:value="manualAccountForm.remark"
+                                        allow-clear
+                                        :disabled="isRunning || manualAccountSubmitting"
+                                        placeholder="可选"
+                                        @pressEnter="submitManualAccount"
+                                    ></a-input>
+                                </div>
                             </div>
 
                             <div class="manual-account-actions">
@@ -1008,6 +1019,12 @@
                                             <div class="table-action-menu">
                                                 <button
                                                     class="table-action-item"
+                                                    @click="handleAccountActionMenu('viewDetail', record)"
+                                                >
+                                                    查看详情
+                                                </button>
+                                                <button
+                                                    class="table-action-item"
                                                     :disabled="!record.canLoginSub2api"
                                                     @click="handleAccountActionMenu('loginSub2Api', record)"
                                                 >
@@ -1128,6 +1145,12 @@
                                         >
                                             <template #content>
                                                 <div class="table-action-menu">
+                                                    <button
+                                                        class="table-action-item"
+                                                        @click="handleAccountActionMenu('viewDetail', record)"
+                                                    >
+                                                        查看详情
+                                                    </button>
                                                     <button
                                                         class="table-action-item"
                                                         :disabled="!record.canLoginSub2api"
@@ -1274,6 +1297,40 @@
                                     >
                                         {{ loginOtpResendRemaining > 0 ? `${loginOtpResendRemaining}s 后可重发` : '重发验证码' }}
                                     </a-button>
+                                </div>
+                            </div>
+                        </div>
+                    </a-modal>
+
+                    <a-modal
+                        v-model:open="accountDetailModalOpen"
+                        :title="accountDetailRecord ? accountDetailRecord.email : '账号详情'"
+                        :footer="null"
+                        width="640px"
+                        @cancel="closeAccountDetailModal"
+                    >
+                        <div v-if="accountDetailRecord" class="account-detail-modal">
+                            <div class="account-detail-section" v-for="section in accountDetailSections" :key="section.title">
+                                <div class="account-detail-section-title">{{ section.title }}</div>
+                                <div class="account-detail-row" v-for="field in section.fields" :key="field.key">
+                                    <div class="account-detail-label">{{ field.label }}</div>
+                                    <div class="account-detail-value-wrap">
+                                        <span class="account-detail-value" :class="{ 'account-detail-value-empty': !field.value }">{{ field.value || '--' }}</span>
+                                        <button
+                                            v-if="field.value"
+                                            type="button"
+                                            class="copy-cell-button"
+                                            title="复制"
+                                            @click.stop="copyText(field.value, field.label)"
+                                        >
+                                            <span class="copy-cell-icon" aria-hidden="true">
+                                                <svg viewBox="0 0 24 24" fill="none">
+                                                    <rect x="9" y="9" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.6"></rect>
+                                                    <path d="M7 15H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+                                                </svg>
+                                            </span>
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>

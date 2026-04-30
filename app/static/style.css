@@ -1015,6 +1015,60 @@ body::after {
     justify-content: flex-end;
 }
 
+.account-detail-modal {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.account-detail-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.account-detail-section-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-sub);
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--line-soft);
+}
+
+.account-detail-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 32px;
+}
+
+.account-detail-label {
+    flex-shrink: 0;
+    width: 80px;
+    font-size: 12px;
+    color: var(--text-soft);
+    font-weight: 600;
+}
+
+.account-detail-value-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    flex: 1;
+}
+
+.account-detail-value {
+    font-size: 13px;
+    color: var(--text-main);
+    word-break: break-all;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.account-detail-value-empty {
+    color: var(--text-soft);
+}
+
 .accounts-table .ant-table {
     background: transparent;
 }

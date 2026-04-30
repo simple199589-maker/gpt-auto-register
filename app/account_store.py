@@ -68,6 +68,7 @@ ACCOUNT_RECORD_DEFAULTS = {
     "createdAt": "",
     "updatedAt": "",
     "lastError": "",
+    "remark": "",
 }
 
 ALLOWED_REGISTRATION_STATES = {"pending", "success", "failed"}
@@ -642,6 +643,7 @@ def _record_to_row(record: dict) -> dict:
         "created_at": normalized["createdAt"],
         "updated_at": normalized["updatedAt"],
         "last_error": normalized["lastError"],
+        "remark": normalized.get("remark", ""),
     }
 
 
@@ -694,6 +696,7 @@ def _row_to_record(row: sqlite3.Row) -> dict:
         "createdAt": row["created_at"],
         "updatedAt": row["updated_at"],
         "lastError": row["last_error"],
+        "remark": row["remark"] if "remark" in row.keys() else "",
     }
     return _normalize_account_record(payload)
 
@@ -800,6 +803,7 @@ def _ensure_account_columns(connection: sqlite3.Connection) -> None:
         "team_manage_message": "TEXT NOT NULL DEFAULT ''",
         "team_manage_uploaded_at": "TEXT NOT NULL DEFAULT ''",
         "delivery_info_json": "TEXT NOT NULL DEFAULT '{}'",
+        "remark": "TEXT NOT NULL DEFAULT ''",
     }
 
     for column_name, definition in required_columns.items():
@@ -1257,7 +1261,7 @@ def upsert_account_record(email: str, updates: dict) -> dict:
                 team_manage_uploaded, team_manage_status, team_manage_status_text, team_manage_message,
                 team_manage_uploaded_at,
                 oauth_tokens_json, oauth_output_file, delivery_info_json,
-                created_at, updated_at, last_error
+                created_at, updated_at, last_error, remark
             )
             VALUES (
                 :email, :password, :account_category, :status_text, :overall_status, :registration_status,
@@ -1270,7 +1274,7 @@ def upsert_account_record(email: str, updates: dict) -> dict:
                 :team_manage_uploaded, :team_manage_status, :team_manage_status_text, :team_manage_message,
                 :team_manage_uploaded_at,
                 :oauth_tokens_json, :oauth_output_file, :delivery_info_json,
-                :created_at, :updated_at, :last_error
+                :created_at, :updated_at, :last_error, :remark
             )
             ON CONFLICT(email) DO UPDATE SET
                 password = excluded.password,
@@ -1307,7 +1311,8 @@ def upsert_account_record(email: str, updates: dict) -> dict:
                 delivery_info_json = excluded.delivery_info_json,
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at,
-                last_error = excluded.last_error
+                last_error = excluded.last_error,
+                remark = excluded.remark
             """,
             row,
         )
@@ -1543,4 +1548,5 @@ def sanitize_account_record_for_web(record: dict) -> dict:
         "canUploadExistingToken": bool(has_oauth_tokens),
         "canUploadTeamManage": bool(is_mother_account and has_oauth_tokens),
         "canDeliver": bool(normalized.get("email") and has_password),
+        "remark": str(normalized.get("remark") or ""),
     }
