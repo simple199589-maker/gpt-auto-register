@@ -323,6 +323,30 @@ class CodexManualOtpFlowTests(unittest.TestCase):
         self.assertEqual(password_calls, [])
         otp_provider.assert_called_once()
 
+    def test_authorize_retry_waits_longer_before_final_attempt(self) -> None:
+        """authorize 重试最后一次前应等待更久以等会话稳定。AI by zb"""
+        from app.codex import _runtime_impl
+
+        session = Mock()
+        session.get.return_value = FakeResponse(status_code=302, headers={"Location": "/add-phone"})
+        logger = Mock()
+
+        with patch.object(_runtime_impl, "_follow_and_extract_code", return_value=""), patch.object(
+            _runtime_impl.time,
+            "sleep",
+        ) as sleep_mock:
+            code = _runtime_impl._retry_authorize_for_code(
+                session=session,
+                authorize_url="https://auth.openai.com/oauth/authorize",
+                oauth_issuer="https://auth.openai.com",
+                email="user@example.com",
+                logger=logger,
+            )
+
+        self.assertIsNone(code)
+        self.assertEqual(session.get.call_count, 3)
+        self.assertEqual([call.args[0] for call in sleep_mock.call_args_list], [2, 15])
+
 
 if __name__ == "__main__":
     unittest.main()

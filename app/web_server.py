@@ -1759,33 +1759,6 @@ def retry_account_registration():
     )
 
 
-@app.route('/api/accounts/sync-sub2api', methods=['POST'])
-def sync_account_sub2api_statuses():
-    """
-    同步 Sub2Api 远端账号状态。
-
-    返回:
-        Response: JSON 响应
-        AI by zb
-    """
-    if state.is_running:
-        return jsonify({"error": "批量任务运行中，请稍后再试"}), 400
-
-    data = request.json or {}
-    group = str(data.get("group") or "").strip()
-    previous_action = state.current_action
-    state.current_action = "同步Sub2Api状态"
-    try:
-        result = login_sub2api.sync_sub2api_account_statuses(group=group)
-    except Exception as exc:
-        return jsonify({"success": False, "error": str(exc), "message": str(exc)}), 400
-    finally:
-        state.current_action = previous_action if previous_action else "等待启动"
-
-    status_code = 200 if result.success else 400
-    return jsonify(result.to_dict()), status_code
-
-
 @app.route('/api/accounts/upload-sub2api', methods=['POST'])
 def upload_account_sub2api():
     email, maybe_error = _run_manual_account_action("补传Sub2", login_sub2api.upload_existing_tokens_to_sub2api)

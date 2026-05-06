@@ -44,6 +44,7 @@ class WebServerLoginSub2ApiTests(unittest.TestCase):
             password="secret-pass",
             mailbox_context="",
             account_category="mother",
+            remark="",
         )
 
     def test_old_retry_plus_endpoint_is_disabled(self) -> None:

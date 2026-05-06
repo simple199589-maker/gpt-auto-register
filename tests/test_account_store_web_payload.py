@@ -107,6 +107,21 @@ class AccountStoreWebPayloadTests(unittest.TestCase):
         self.assertIn("account_category", columns)
         self.assertIn("team_manage_status", columns)
 
+    def test_sanitize_account_record_allows_blank_password_login_action(self) -> None:
+        """空密码账号前端也应允许发起登录上传。AI by zb"""
+        from app.account_store import sanitize_account_record_for_web
+
+        payload = sanitize_account_record_for_web(
+            {
+                "email": "blank@example.com",
+                "password": "",
+                "loginState": "pending",
+                "sub2apiState": "pending",
+            }
+        )
+
+        self.assertTrue(payload["canLoginSub2api"])
+
 
 if __name__ == "__main__":
     unittest.main()

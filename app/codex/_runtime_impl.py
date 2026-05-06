@@ -1004,7 +1004,8 @@ def _retry_authorize_for_code(
     oauth_issuer: str,
     email: str,
     logger: logging.Logger,
-    attempts: int = 2,
+    attempts: int = 3,
+    retry_delays: Optional[list[int]] = None,
 ) -> Optional[str]:
     """
     在已有认证会话稳定后重新触发 OAuth authorize 并提取 code。
@@ -1016,10 +1017,12 @@ def _retry_authorize_for_code(
         email: 登录邮箱
         logger: 日志器
         attempts: 最大尝试次数
+        retry_delays: 每次失败后的等待秒数
     返回:
         Optional[str]: OAuth code
         AI by zb
     """
+    delays = list(retry_delays) if retry_delays is not None else [2, 15]
     for attempt in range(1, max(int(attempts or 1), 1) + 1):
         try:
             response = session.get(
@@ -1056,7 +1059,10 @@ def _retry_authorize_for_code(
         except Exception as exc:
             logger.warning("[Codex] authorize 重试异常: %s | attempt=%d | email=%s", exc, attempt, email)
         if attempt < attempts:
-            time.sleep(2)
+            delay = int(delays[attempt - 1]) if attempt - 1 < len(delays) else int(delays[-1] if delays else 2)
+            if delay > 0:
+                logger.info("[Codex] 等待 %d 秒后再次尝试获取 auth_code | next_attempt=%d | email=%s", delay, attempt + 1, email)
+                time.sleep(delay)
     return None
 
 
@@ -1785,32 +1791,6 @@ def build_sub2api_config(config: Dict[str, Any]) -> Sub2ApiConfig:
     )
 
 
-def list_sub2api_accounts(
-    config: Dict[str, Any],
-    logger: Optional[logging.Logger] = None,
-    group: str = "",
-) -> List[Dict[str, Any]]:
-    """
-    查询 Sub2Api 已发布账号列表。
-
-    参数:
-        config: 项目配置
-        logger: 日志器
-        group: 可选远端分组名称
-    返回:
-        List[Dict[str, Any]]: 远端账号列表
-        AI by zb
-    """
-    active_logger = logger or get_logger("sub2api")
-    sub2api_config = build_sub2api_config(config)
-    uploader = Sub2ApiUploader(
-        create_session(),
-        sub2api_config,
-        active_logger,
-    )
-    return uploader.list_accounts(group=group, group_ids=sub2api_config.group_ids)
-
-
 def upload_to_sub2api(
     email: str,
     tokens: Dict[str, Any],
@@ -1923,7 +1903,6 @@ __all__ = [
     "generate_random_birthday",
     "generate_random_name",
     "get_logger",
-    "list_sub2api_accounts",
     "load_runtime_config",
     "perform_http_oauth_login",
     "prompt_for_email_otp",
