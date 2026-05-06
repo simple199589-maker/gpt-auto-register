@@ -19,6 +19,7 @@ from ._runtime_impl import (
     generate_pkce,
     generate_random_birthday,
     generate_random_name,
+    get_last_login_failure_reason,
     perform_http_oauth_login,
     summarize_auth_session_cookies,
 )
@@ -42,6 +43,7 @@ __all__ = [
     "generate_pkce",
     "generate_random_birthday",
     "generate_random_name",
+    "get_last_login_failure_reason",
     "perform_http_oauth_login",
     "summarize_auth_session_cookies",
 ]

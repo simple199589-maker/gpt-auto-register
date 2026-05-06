@@ -16,6 +16,7 @@ import random
 import re
 import secrets
 import sys
+import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass
@@ -38,6 +39,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 ROOT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_FILE = ROOT_DIR / "config.yaml"
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "output_tokens"
+_LOGIN_FAILURE_CONTEXT = threading.local()
 
 OPENAI_AUTH_BASE = "https://auth.openai.com"
 OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -139,6 +141,53 @@ def get_logger(name: str = "codex-login") -> logging.Logger:
         logger.setLevel(logging.INFO)
         logger.propagate = False
     return logger
+
+
+def set_last_login_failure_reason(reason: str) -> None:
+    """
+    保存当前线程最近一次 Codex 登录失败原因。
+
+    参数:
+        reason: 失败原因
+    返回:
+        None
+        AI by zb
+    """
+    _LOGIN_FAILURE_CONTEXT.reason = str(reason or "").strip()
+
+
+def get_last_login_failure_reason(clear: bool = False) -> str:
+    """
+    获取当前线程最近一次 Codex 登录失败原因。
+
+    参数:
+        clear: 是否读取后清空
+    返回:
+        str: 失败原因
+        AI by zb
+    """
+    reason = str(getattr(_LOGIN_FAILURE_CONTEXT, "reason", "") or "").strip()
+    if clear:
+        set_last_login_failure_reason("")
+    return reason
+
+
+def fail_oauth_login(reason: str, logger: logging.Logger, email: str) -> Optional[Dict[str, Any]]:
+    """
+    记录 OAuth 登录失败原因并返回空结果。
+
+    参数:
+        reason: 失败原因
+        logger: 日志器
+        email: 登录邮箱
+    返回:
+        None
+        AI by zb
+    """
+    message = str(reason or "Codex OAuth 登录失败").strip()
+    set_last_login_failure_reason(message)
+    logger.warning("[Codex] %s | email=%s", message, email)
+    return None
 
 
 def load_runtime_config(config_path: str = "") -> Dict[str, Any]:
@@ -949,6 +998,68 @@ def _wait_auto_otp(
     return None
 
 
+def _retry_authorize_for_code(
+    session: requests.Session,
+    authorize_url: str,
+    oauth_issuer: str,
+    email: str,
+    logger: logging.Logger,
+    attempts: int = 2,
+) -> Optional[str]:
+    """
+    在已有认证会话稳定后重新触发 OAuth authorize 并提取 code。
+
+    参数:
+        session: 当前认证会话
+        authorize_url: 原始 authorize URL
+        oauth_issuer: OAuth 服务根地址
+        email: 登录邮箱
+        logger: 日志器
+        attempts: 最大尝试次数
+    返回:
+        Optional[str]: OAuth code
+        AI by zb
+    """
+    for attempt in range(1, max(int(attempts or 1), 1) + 1):
+        try:
+            response = session.get(
+                authorize_url,
+                headers=NAVIGATE_HEADERS,
+                verify=False,
+                timeout=30,
+                allow_redirects=False,
+            )
+            location = response.headers.get("Location", "")
+            code = _extract_code_from_url(location) or _extract_code_from_url(str(response.url))
+            if not code and location:
+                next_url = location if location.startswith("http") else f"{oauth_issuer}{location}"
+                code = _follow_and_extract_code(session, next_url, oauth_issuer)
+            if not code and response.status_code == 200:
+                code = _follow_and_extract_code(session, authorize_url, oauth_issuer)
+            if code:
+                logger.info("[Codex] authorize 重试获取 auth_code 成功 | attempt=%d | email=%s", attempt, email)
+                return code
+            logger.info(
+                "[Codex] authorize 重试未获取 auth_code | HTTP %s | url=%s | attempt=%d | email=%s",
+                response.status_code,
+                str(response.url)[:120],
+                attempt,
+                email,
+            )
+        except requests.exceptions.ConnectionError as exc:
+            match = re.search(r"(https?://localhost[^\s'\"]+)", str(exc))
+            if match:
+                code = _extract_code_from_url(match.group(1))
+                if code:
+                    logger.info("[Codex] authorize 重试从本地回调异常提取 auth_code | attempt=%d | email=%s", attempt, email)
+                    return code
+        except Exception as exc:
+            logger.warning("[Codex] authorize 重试异常: %s | attempt=%d | email=%s", exc, attempt, email)
+        if attempt < attempts:
+            time.sleep(2)
+    return None
+
+
 def _parse_auth_continue_response(response: requests.Response) -> Tuple[str, str]:
     """
     从认证接口响应中提取下一步地址与页面类型。
@@ -971,7 +1082,17 @@ def _parse_auth_continue_response(response: requests.Response) -> Tuple[str, str
                 or data.get("redirect_url")
                 or ""
             )
-            page_type = str(((data.get("page") or {}).get("type")) or data.get("page_type") or "")
+            page = data.get("page") if isinstance(data.get("page"), dict) else {}
+            page_payload = page.get("payload") if isinstance(page.get("payload"), dict) else {}
+            page_type = str(page.get("type") or data.get("page_type") or "")
+            verification_mode = str(
+                page_payload.get("email_verification_mode")
+                or data.get("email_verification_mode")
+                or ""
+            ).strip().lower()
+            if verification_mode in {"passwordless_login", "email_otp", "otp"}:
+                page_type = "email_otp_verification"
+                continue_url = continue_url or "/email-verification"
     except Exception:
         pass
 
@@ -1063,9 +1184,12 @@ def perform_http_oauth_login(
         AI by zb
     """
     active_logger = logger or get_logger()
+    set_last_login_failure_reason("")
     session = create_session(proxy=proxy)
     device_id = str(uuid.uuid4())
     resolved_mailbox_context = resolve_mailbox_context(email, mailbox_context)
+    normalized_password = str(password or "").strip()
+    passwordless_login = not normalized_password
 
     session.cookies.set("oai-did", device_id, domain=".auth.openai.com")
     session.cookies.set("oai-did", device_id, domain="auth.openai.com")
@@ -1093,8 +1217,7 @@ def perform_http_oauth_login(
             timeout=30,
         )
     except Exception as exc:
-        active_logger.warning("[Codex] Step A 失败: %s | email=%s", exc, email)
-        return None
+        return fail_oauth_login(f"Step A authorize 失败: {exc}", active_logger, email)
 
     active_logger.info("[Codex] Step B: 提交邮箱 | email=%s", email)
     headers = dict(COMMON_HEADERS)
@@ -1104,8 +1227,7 @@ def perform_http_oauth_login(
 
     sentinel_email = build_sentinel_token(session, device_id, flow="authorize_continue")
     if not sentinel_email:
-        active_logger.warning("[Codex] Step B sentinel 失败 | email=%s", email)
-        return None
+        return fail_oauth_login("Step B sentinel 生成失败", active_logger, email)
     headers["openai-sentinel-token"] = sentinel_email
 
     try:
@@ -1117,11 +1239,9 @@ def perform_http_oauth_login(
             timeout=30,
         )
     except Exception as exc:
-        active_logger.warning("[Codex] Step B 异常: %s | email=%s", exc, email)
-        return None
+        return fail_oauth_login(f"Step B 提交邮箱异常: {exc}", active_logger, email)
     if response.status_code != 200:
-        active_logger.warning("[Codex] Step B 失败: HTTP %s | email=%s", response.status_code, email)
-        return None
+        return fail_oauth_login(f"Step B 提交邮箱失败: HTTP {response.status_code} {response.text[:120]}", active_logger, email)
     continue_url, page_type = _parse_auth_continue_response(response)
     if continue_url:
         active_logger.info(
@@ -1132,6 +1252,11 @@ def perform_http_oauth_login(
         )
 
     is_step_b_otp_challenge = page_type == "email_otp_verification" or "email-verification" in continue_url
+    if passwordless_login and not is_step_b_otp_challenge:
+        continue_url = "/email-verification"
+        page_type = "email_otp_verification"
+        is_step_b_otp_challenge = True
+        active_logger.info("[Codex] 空密码账号使用邮箱验证码登录 | email=%s", email)
     if not is_step_b_otp_challenge:
         active_logger.info("[Codex] Step C: 提交密码 | email=%s", email)
         password_referer = f"{oauth_issuer}/log-in/password"
@@ -1142,22 +1267,20 @@ def perform_http_oauth_login(
 
         sentinel_password = build_sentinel_token(session, device_id, flow="password_verify")
         if not sentinel_password:
-            active_logger.warning("[Codex] Step C sentinel 失败 | email=%s", email)
-            return None
+            return fail_oauth_login("Step C sentinel 生成失败", active_logger, email)
         headers["openai-sentinel-token"] = sentinel_password
 
         try:
             response = session.post(
                 f"{oauth_issuer}/api/accounts/password/verify",
-                json={"password": password},
+                json={"password": normalized_password},
                 headers=headers,
                 verify=False,
                 timeout=30,
                 allow_redirects=False,
             )
         except Exception as exc:
-            active_logger.warning("[Codex] Step C 异常: %s | email=%s", exc, email)
-            return None
+            return fail_oauth_login(f"Step C 提交密码异常: {exc}", active_logger, email)
         continue_url, page_type = _parse_auth_continue_response(response)
         if response.status_code != 200:
             if response.status_code == 409 and otp_mode == "manual" and not continue_url:
@@ -1167,8 +1290,7 @@ def perform_http_oauth_login(
                 page_type == "email_otp_verification" or "email-verification" in continue_url
             )
             if not is_otp_challenge:
-                active_logger.warning("[Codex] Step C 失败: HTTP %s | email=%s", response.status_code, email)
-                return None
+                return fail_oauth_login(f"Step C 提交密码失败: HTTP {response.status_code} {response.text[:120]}", active_logger, email)
             active_logger.info(
                 "[Codex] Step C 返回 OTP 验证挑战: HTTP 409 | continue_url=%s | email=%s",
                 continue_url[:120],
@@ -1182,8 +1304,7 @@ def perform_http_oauth_login(
             email,
         )
     if not continue_url:
-        active_logger.warning("[Codex] Step C 无 continue_url | email=%s", email)
-        return None
+        return fail_oauth_login("Step C 未返回 continue_url", active_logger, email)
 
     if page_type == "email_otp_verification" or "email-verification" in continue_url:
         active_logger.info("[Codex] Step D: 需要 OTP 验证 | email=%s", email)
@@ -1294,7 +1415,7 @@ def perform_http_oauth_login(
             else:
                 otp_code = prompt_for_email_otp(email=email, logger=active_logger, timeout=300)
         if not otp_code:
-            return None
+            return fail_oauth_login("未获取到邮箱验证码", active_logger, email)
 
         validate_response = session.post(
             f"{oauth_issuer}/api/accounts/email-otp/validate",
@@ -1304,12 +1425,11 @@ def perform_http_oauth_login(
             timeout=30,
         )
         if validate_response.status_code != 200:
-            active_logger.warning(
-                "[Codex] OTP 验证失败: HTTP %s | %s",
-                validate_response.status_code,
-                validate_response.text[:200],
+            return fail_oauth_login(
+                f"OTP 验证失败: HTTP {validate_response.status_code} {validate_response.text[:120]}",
+                active_logger,
+                email,
             )
-            return None
 
         try:
             validate_data = validate_response.json()
@@ -1365,8 +1485,8 @@ def perform_http_oauth_login(
                 str(response_about.url)[:120],
                 email,
             )
-        except Exception:
-            return None
+        except Exception as exc:
+            return fail_oauth_login(f"about-you 页面加载异常: {exc}", active_logger, email)
 
         if "consent" in str(response_about.url) or "organization" in str(response_about.url):
             continue_url = str(response_about.url)
@@ -1415,7 +1535,7 @@ def perform_http_oauth_login(
     if "consent" in page_type:
         continue_url = f"{oauth_issuer}/sign-in-with-chatgpt/codex/consent"
     if not continue_url or "email-verification" in continue_url:
-        return None
+        return fail_oauth_login(f"OTP 后仍未进入 Codex 授权页: {continue_url or '无 continue_url'}", active_logger, email)
 
     consent_url = f"{oauth_issuer}{continue_url}" if continue_url.startswith("/") else continue_url
     auth_code = None
@@ -1598,10 +1718,18 @@ def perform_http_oauth_login(
             pass
 
     if not auth_code:
-        active_logger.warning("[Codex] 未能获取 auth_code | email=%s", email)
-        return None
+        auth_code = _retry_authorize_for_code(
+            session=session,
+            authorize_url=authorize_url,
+            oauth_issuer=oauth_issuer,
+            email=email,
+            logger=active_logger,
+        )
 
-    return _exchange_code_for_token(
+    if not auth_code:
+        return fail_oauth_login("未能获取 auth_code", active_logger, email)
+
+    tokens = _exchange_code_for_token(
         auth_code,
         code_verifier,
         oauth_issuer=oauth_issuer,
@@ -1610,6 +1738,9 @@ def perform_http_oauth_login(
         proxy=proxy,
         logger=active_logger,
     )
+    if not tokens:
+        return fail_oauth_login("token 交换失败", active_logger, email)
+    return tokens
 
 
 def save_token_payload(email: str, token_payload: Dict[str, Any], output_dir: str = "") -> str:
@@ -1652,6 +1783,32 @@ def build_sub2api_config(config: Dict[str, Any]) -> Sub2ApiConfig:
         group_ids=normalize_group_ids(sub2api_cfg.get("group_ids", [2]), default=[2]),
         client_id=OAUTH_CLIENT_ID,
     )
+
+
+def list_sub2api_accounts(
+    config: Dict[str, Any],
+    logger: Optional[logging.Logger] = None,
+    group: str = "",
+) -> List[Dict[str, Any]]:
+    """
+    查询 Sub2Api 已发布账号列表。
+
+    参数:
+        config: 项目配置
+        logger: 日志器
+        group: 可选远端分组名称
+    返回:
+        List[Dict[str, Any]]: 远端账号列表
+        AI by zb
+    """
+    active_logger = logger or get_logger("sub2api")
+    sub2api_config = build_sub2api_config(config)
+    uploader = Sub2ApiUploader(
+        create_session(),
+        sub2api_config,
+        active_logger,
+    )
+    return uploader.list_accounts(group=group, group_ids=sub2api_config.group_ids)
 
 
 def upload_to_sub2api(
@@ -1766,6 +1923,7 @@ __all__ = [
     "generate_random_birthday",
     "generate_random_name",
     "get_logger",
+    "list_sub2api_accounts",
     "load_runtime_config",
     "perform_http_oauth_login",
     "prompt_for_email_otp",

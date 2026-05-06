@@ -169,6 +169,55 @@ class Sub2ApiUploader:
             response_data = None
         return response.status_code, body, response_data
 
+    def _get_json(
+        self,
+        url: str,
+        params: Dict[str, Any],
+        headers: Dict[str, str],
+        timeout: int,
+    ) -> Tuple[int, str, Optional[Dict[str, Any]]]:
+        """
+        发送 JSON GET 请求。
+
+        参数:
+            url: 请求地址
+            params: 查询参数
+            headers: 请求头
+            timeout: 超时时间
+        返回:
+            Tuple[int, str, Optional[Dict[str, Any]]]: 状态码、响应体、解析后的 JSON
+            AI by zb
+        """
+        response = self.session.get(
+            url,
+            params=params,
+            headers=headers,
+            timeout=timeout,
+            verify=False,
+            allow_redirects=False,
+        )
+        if response.status_code in (301, 302, 307, 308):
+            location = str(response.headers.get("Location") or "").strip()
+            if location:
+                redirect_url = urljoin(url, location)
+                if self.logger:
+                    self.logger.info("[Sub2Api] 跟随 GET 重定向: %s -> %s", url, redirect_url)
+                response = self.session.get(
+                    redirect_url,
+                    params=params,
+                    headers=headers,
+                    timeout=timeout,
+                    verify=False,
+                    allow_redirects=False,
+                )
+
+        body = response.text
+        try:
+            response_data = response.json()
+        except Exception:
+            response_data = None
+        return response.status_code, body, response_data
+
     @staticmethod
     def _matches_account_email(candidate: Any, email: str) -> bool:
         """
@@ -345,6 +394,115 @@ class Sub2ApiUploader:
             "type": "oauth",
         }
 
+    def _authorized_request(
+        self,
+        request_func: Any,
+    ) -> tuple[int, str, Optional[Dict[str, Any]]]:
+        """
+        执行带 bearer 的 Sub2Api 请求，401 时尝试登录后重试。
+
+        参数:
+            request_func: 接收 headers 并返回响应三元组的函数
+        返回:
+            tuple[int, str, Optional[Dict[str, Any]]]: 请求结果
+            AI by zb
+        """
+        bearer = self._bearer_holder[0]
+        status_code, body, response_data = request_func(self._build_headers(bearer))
+
+        if status_code == 401 and self.config.email and self.config.password:
+            with self._auth_lock:
+                if self._bearer_holder[0] == bearer:
+                    new_token = self.login()
+                    if new_token:
+                        self._bearer_holder[0] = new_token
+            status_code, body, response_data = request_func(self._build_headers(self._bearer_holder[0]))
+
+        return status_code, body, response_data
+
+    def list_accounts(
+        self,
+        page_size: int = 50,
+        group: str = "",
+        group_ids: Optional[List[int]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        分页查询 Sub2Api 已发布账号。
+
+        参数:
+            page_size: 每页数量
+            group: 可选分组名称
+            group_ids: 可选本地分组 ID 过滤
+        返回:
+            List[Dict[str, Any]]: 远端账号列表
+            AI by zb
+        """
+        if not self.config.base_url:
+            return []
+
+        url = f"{self.config.base_url}/api/v1/admin/accounts"
+        normalized_group_ids = {int(item) for item in (group_ids or []) if str(item).strip().lstrip("-").isdigit()}
+        accounts: List[Dict[str, Any]] = []
+        current_page = 1
+        total_pages = 1
+        safe_page_size = max(min(int(page_size or 50), 200), 1)
+
+        while current_page <= total_pages:
+            params = {
+                "page": current_page,
+                "page_size": safe_page_size,
+                "platform": "",
+                "type": "",
+                "status": "",
+                "privacy_mode": "",
+                "group": str(group or "").strip(),
+                "search": "",
+                "sort_by": "name",
+                "sort_order": "asc",
+                "timezone": "Asia/Shanghai",
+            }
+
+            def do_request(headers: Dict[str, str]) -> tuple[int, str, Optional[Dict[str, Any]]]:
+                try:
+                    return self._get_json(url, params=params, headers=headers, timeout=20)
+                except Exception as exc:
+                    return 0, str(exc), None
+
+            status_code, body, response_data = self._authorized_request(do_request)
+            if status_code != 200 or not isinstance(response_data, dict):
+                if self.logger:
+                    self.logger.warning(
+                        "[Sub2Api] 查询账号列表失败 | HTTP %s | %s",
+                        status_code,
+                        self._summarize_response(response_data, body),
+                    )
+                break
+
+            data = response_data.get("data") if isinstance(response_data.get("data"), dict) else {}
+            items = data.get("items") if isinstance(data, dict) else []
+            if isinstance(items, list):
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    remote_group_ids = item.get("group_ids") if isinstance(item.get("group_ids"), list) else []
+                    if normalized_group_ids:
+                        matched_group_ids = {
+                            int(value)
+                            for value in remote_group_ids
+                            if str(value).strip().lstrip("-").isdigit()
+                        }
+                        if not matched_group_ids.intersection(normalized_group_ids):
+                            continue
+                    accounts.append(item)
+
+            try:
+                total_pages = max(int(data.get("pages") or 1), 1)
+            except Exception:
+                total_pages = 1
+            current_page += 1
+
+        return accounts
+
     def push_account(self, email: str, tokens: Dict[str, Any]) -> bool:
         """
         上传账号到 Sub2Api。
@@ -373,18 +531,7 @@ class Sub2ApiUploader:
             except Exception as exc:
                 return 0, str(exc), None
 
-        bearer = self._bearer_holder[0]
-        headers = self._build_headers(bearer)
-        status_code, body, response_data = do_request(headers)
-
-        if status_code == 401 and self.config.email and self.config.password:
-            with self._auth_lock:
-                if self._bearer_holder[0] == bearer:
-                    new_token = self.login()
-                    if new_token:
-                        self._bearer_holder[0] = new_token
-            headers = self._build_headers(self._bearer_holder[0])
-            status_code, body, response_data = do_request(headers)
+        status_code, body, response_data = self._authorized_request(do_request)
 
         created_account = self._extract_created_account(response_data, email)
         ok = status_code in (200, 201) and created_account is not None

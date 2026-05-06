@@ -231,6 +231,7 @@ const app = createApp({
         const accountsLoading = ref(false)
         const accountExporting = ref(false)
         const accountImporting = ref(false)
+        const sub2apiSyncing = ref(false)
         const accounts = ref([])
         const logContainerRef = ref(null)
         const accountImportFileRef = ref(null)
@@ -799,10 +800,6 @@ const app = createApp({
                 showError('请输入账号邮箱')
                 return
             }
-            if (!password) {
-                showError('请输入账号密码')
-                return
-            }
 
             manualAccountSubmitting.value = true
             try {
@@ -901,6 +898,26 @@ const app = createApp({
                 showError(`${email}\n${error.message}`)
             } finally {
                 accountActionLoading[actionKey] = false
+            }
+        }
+
+        async function syncSub2ApiStatuses() {
+            if (sub2apiSyncing.value) {
+                return
+            }
+            sub2apiSyncing.value = true
+            try {
+                const data = await requestJson('/api/accounts/sync-sub2api', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                })
+                showSuccess(data && data.message ? data.message : 'Sub2Api 状态同步完成')
+                await loadAccounts()
+            } catch (error) {
+                showError(error.message)
+            } finally {
+                sub2apiSyncing.value = false
             }
         }
 

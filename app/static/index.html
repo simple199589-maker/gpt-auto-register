@@ -755,6 +755,14 @@
                                             </button>
                                             <button
                                                 class="table-action-item toolbar-more-item"
+                                                :disabled="isRunning || accountsLoading || sub2apiSyncing"
+                                                @click="syncSub2ApiStatuses"
+                                            >
+                                                <sync-outlined></sync-outlined>
+                                                <span>{{ sub2apiSyncing ? '同步中...' : '同步 Sub2Api 状态' }}</span>
+                                            </button>
+                                            <button
+                                                class="table-action-item toolbar-more-item"
                                                 :disabled="accountsLoading"
                                                 @click="loadAccounts"
                                             >
@@ -785,7 +793,7 @@
                             <div class="manual-account-header">
                                 <div>
                                     <div class="manual-account-title">导入账号</div>
-                                    <div class="manual-account-desc">录入邮箱和密码后，账号会进入待登录验证队列。</div>
+                                    <div class="manual-account-desc">录入邮箱，密码可留空；空密码账号会走邮箱验证码登录。</div>
                                 </div>
                             </div>
 
@@ -807,7 +815,7 @@
                                         v-model:value="manualAccountForm.password"
                                         allow-clear
                                         :disabled="isRunning || manualAccountSubmitting"
-                                        placeholder="必填"
+                                        placeholder="可留空"
                                         @pressEnter="submitManualAccount"
                                     ></a-input-password>
                                 </div>

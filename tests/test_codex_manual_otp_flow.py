@@ -290,6 +290,39 @@ class CodexManualOtpFlowTests(unittest.TestCase):
         self.assertEqual(validate_calls[0]["json"], {"code": "654321"})
         self.assertTrue(validate_calls[0]["headers"].get("oai-device-id"))
 
+    def test_blank_password_uses_email_otp_without_password_verify(self) -> None:
+        """空密码账号应直接使用邮箱验证码模式而不提交密码。AI by zb"""
+        fake_session = FakeSession()
+        otp_provider = Mock(return_value="123456")
+        from app.codex import _runtime_impl
+
+        expected_tokens = {
+            "access_token": "access-token",
+            "refresh_token": "refresh-token",
+            "id_token": "id-token",
+        }
+
+        with patch.object(_runtime_impl, "create_session", return_value=fake_session), patch.object(
+            _runtime_impl,
+            "build_sentinel_token",
+            return_value="sentinel-token",
+        ), patch.object(_runtime_impl, "_exchange_code_for_token", return_value=expected_tokens):
+            tokens = _runtime_impl.perform_http_oauth_login(
+                email="thirdparty@example.com",
+                password="",
+                otp_mode="manual",
+                otp_provider=otp_provider,
+            )
+
+        self.assertEqual(tokens, expected_tokens)
+        password_calls = [
+            url
+            for url, _kwargs in fake_session.posts
+            if url.endswith("/api/accounts/password/verify")
+        ]
+        self.assertEqual(password_calls, [])
+        otp_provider.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

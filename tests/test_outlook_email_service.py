@@ -92,6 +92,21 @@ class OutlookEmailServiceTests(unittest.TestCase):
         self.assertEqual(emails, [{"id": 1}])
         fetch_mock.assert_called_once_with("mailbox::demo@outlook.com")
 
+    def test_email_service_auto_dispatches_hotmail_domain(self) -> None:
+        """Hotmail 域名也应自动复用 Outlook 邮箱接口。AI by zb"""
+        import app.email_service as email_service
+        from app import outlook_email_service
+
+        try:
+            email_service.set_email_provider_override("worker")
+            with patch.object(outlook_email_service, "fetch_emails", return_value=[{"id": 1}]) as fetch_mock:
+                emails = email_service.fetch_emails("mailbox::demo@hotmail.com")
+        finally:
+            email_service.set_email_provider_override("")
+
+        self.assertEqual(emails, [{"id": 1}])
+        fetch_mock.assert_called_once_with("mailbox::demo@hotmail.com")
+
 
 if __name__ == "__main__":
     unittest.main()

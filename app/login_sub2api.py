@@ -15,7 +15,9 @@ from app.codex.runtime import (
     OAUTH_CLIENT_ID,
     build_token_dict,
     create_session,
+    get_last_login_failure_reason,
     get_logger,
+    list_sub2api_accounts,
     load_runtime_config,
     perform_http_oauth_login,
     resolve_proxy,
@@ -26,6 +28,24 @@ from app.config import cfg
 from app.email_service import is_outlook_email_address
 from app.team_manage import TeamManageConfig, TeamManageUploader
 from app.utils import get_account_record, upsert_account_record
+
+
+@dataclass
+class Sub2ApiSyncResult:
+    """Sub2Api 远端状态同步结果。AI by zb"""
+
+    success: bool
+    message: str = ""
+    checked: int = 0
+    normal: int = 0
+    abnormal: int = 0
+    missing: int = 0
+    ignored: int = 0
+    updated: int = 0
+    details: list[Dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass
@@ -114,7 +134,41 @@ def _normalize_account_category(value: str) -> str:
     return "normal"
 
 
-def _has_complete_oauth_tokens(account: dict) -> bool:
+def _extract_remote_account_email(item: dict) -> str:
+    """
+    从 Sub2Api 远端账号对象提取邮箱。
+
+    参数:
+        item: 远端账号对象
+    返回:
+        str: 小写邮箱
+        AI by zb
+    """
+    if not isinstance(item, dict):
+        return ""
+    extra = item.get("extra") if isinstance(item.get("extra"), dict) else {}
+    for value in (item.get("name"), extra.get("email")):
+        normalized = _normalize_email(str(value or ""))
+        if _is_valid_email(normalized):
+            return normalized
+    return ""
+
+
+def _is_locally_uploaded_to_sub2api(account: dict) -> bool:
+    """
+    判断账号是否属于需要同步的已上传账号。
+
+    参数:
+        account: 本地账号记录
+    返回:
+        bool: 是否已登录上传
+        AI by zb
+    """
+    if not account:
+        return False
+    return bool(account.get("sub2apiUploaded") or str(account.get("sub2apiState") or "").strip().lower() == "success")
+
+
     """
     判断账号是否已保存完整 OAuth 三件套。
 
@@ -281,8 +335,6 @@ def import_login_account(
         raise ValueError("邮箱不能为空")
     if not _is_valid_email(normalized_email):
         raise ValueError("邮箱格式不正确")
-    if not normalized_password:
-        raise ValueError("密码不能为空")
 
     current = get_account_record(normalized_email) or {}
     context = str(mailbox_context or current.get("mailboxContext") or "").strip()
@@ -317,8 +369,94 @@ def import_login_account(
         },
     )
 
+def sync_sub2api_account_statuses(config_path: str = "", group: str = "") -> Sub2ApiSyncResult:
+    """
+    同步 Sub2Api 远端账号状态到本地账号记录。
 
-def upload_existing_tokens_to_sub2api(email: str, config_path: str = "") -> LoginSub2ApiResult:
+    参数:
+        config_path: 可选配置文件路径
+        group: 可选远端分组名称
+    返回:
+        Sub2ApiSyncResult: 同步结果
+        AI by zb
+    """
+    config = load_runtime_config(config_path)
+    if not _is_sub2api_configured(config):
+        return Sub2ApiSyncResult(success=False, message="Sub2Api 未配置，无法同步")
+
+    logger = get_logger("login-sub2api")
+    sub2api_config = (config or {}).get("sub2api") or {}
+    resolved_group = str(group or sub2api_config.get("group") or sub2api_config.get("group_name") or "").strip()
+    local_accounts = load_account_records()
+    target_accounts = [account for account in local_accounts if _is_locally_uploaded_to_sub2api(account)]
+    ignored = max(len(local_accounts) - len(target_accounts), 0)
+    remote_accounts = list_sub2api_accounts(config, logger=logger, group=resolved_group)
+    remote_by_email = {
+        email: item
+        for item in remote_accounts
+        for email in [_extract_remote_account_email(item)]
+        if email
+    }
+
+    result = Sub2ApiSyncResult(
+        success=True,
+        checked=len(target_accounts),
+        ignored=ignored,
+    )
+
+    for account in target_accounts:
+        email = _normalize_email(str(account.get("email") or ""))
+        if not email:
+            continue
+        remote = remote_by_email.get(email)
+        if not remote:
+            message = "Sub2Api 未查询到账号"
+            updates = {
+                "status": "Sub2Api远端缺失",
+                "sub2apiUploaded": False,
+                "sub2apiState": "failed",
+                "sub2apiStatus": "远端缺失",
+                "sub2apiMessage": message,
+                "overallStatus": "failed",
+                "lastError": message,
+            }
+            result.missing += 1
+            result.details.append({"email": email, "status": "missing", "message": message})
+        else:
+            remote_status = str(remote.get("status") or "").strip().lower()
+            if remote_status == "error":
+                message = str(remote.get("error_message") or "Sub2Api 远端账号异常").strip()
+                updates = {
+                    "status": "Sub2Api远端异常",
+                    "sub2apiUploaded": True,
+                    "sub2apiState": "failed",
+                    "sub2apiStatus": "远端异常",
+                    "sub2apiMessage": message,
+                    "overallStatus": "failed",
+                    "lastError": message,
+                }
+                result.abnormal += 1
+                result.details.append({"email": email, "status": "error", "message": message})
+            else:
+                message = f"Sub2Api 远端状态正常: {remote_status or 'active'}"
+                updates = {
+                    "status": "已上传Sub2Api",
+                    "sub2apiUploaded": True,
+                    "sub2apiState": "success",
+                    "sub2apiStatus": "远端正常",
+                    "sub2apiMessage": message,
+                    "overallStatus": "success" if str(account.get("loginState") or "") == "success" else "pending",
+                    "lastError": "",
+                }
+                result.normal += 1
+                result.details.append({"email": email, "status": remote_status or "active", "message": message})
+        upsert_account_record(email, updates)
+        result.updated += 1
+
+    result.message = f"同步完成：检查 {result.checked} 个，正常 {result.normal} 个，异常 {result.abnormal} 个，缺失 {result.missing} 个"
+    return result
+
+
     """
     仅复用已保存 OAuth 三件套上传 Sub2Api，不触发重新登录。
 
@@ -504,20 +642,7 @@ def login_and_upload_account(
         return LoginSub2ApiResult(success=False, email=normalized_email, stage="account", message="账号不存在")
 
     password = str(account.get("password") or "").strip()
-    if not password or password == "N/A":
-        message = "账号未保存可用密码，无法登录验证"
-        upsert_account_record(
-            normalized_email,
-            {
-                "status": "登录失败",
-                "loginState": "failed",
-                "loginStatus": "failed",
-                "loginMessage": message,
-                "overallStatus": "failed",
-                "lastError": message,
-            },
-        )
-        return LoginSub2ApiResult(success=False, email=normalized_email, stage="login", message=message)
+    has_password = bool(password and password != "N/A")
 
     upsert_account_record(
         normalized_email,
@@ -541,7 +666,7 @@ def login_and_upload_account(
 
     tokens = perform_http_oauth_login(
         email=normalized_email,
-        password=password,
+        password=password if has_password else "",
         proxy=effective_proxy,
         otp_mode=normalized_otp_mode,
         mailbox_context=mailbox_context,
@@ -549,7 +674,8 @@ def login_and_upload_account(
         logger=logger,
     )
     if not tokens:
-        message = "未获取到 OAuth 三件套"
+        failure_reason = get_last_login_failure_reason(clear=True)
+        message = failure_reason or "未获取到 OAuth 三件套"
         upsert_account_record(
             normalized_email,
             {
