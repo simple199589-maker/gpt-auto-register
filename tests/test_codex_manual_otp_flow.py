@@ -73,6 +73,43 @@ class FakeSession:
         return FakeResponse(status_code=200, payload={})
 
 
+class AddPhoneAfterOtpSession(FakeSession):
+    """OTP 后进入 add-phone 的伪会话。AI by zb"""
+
+    def get(self, url: str, **kwargs):
+        """记录 GET 请求并模拟重触发 authorize 才返回 code。AI by zb"""
+        self.gets.append((url, kwargs))
+        if "/oauth/authorize" in url and kwargs.get("allow_redirects") is False:
+            return FakeResponse(
+                status_code=302,
+                headers={"Location": "http://localhost:1455/auth/callback?code=retry-code&state=state"},
+            )
+        return FakeResponse(status_code=200, payload={})
+
+    def post(self, url: str, **kwargs):
+        """记录 POST 请求并让 OTP 验证后进入 add-phone。AI by zb"""
+        self.posts.append((url, kwargs))
+        if url.endswith("/api/accounts/authorize/continue"):
+            return FakeResponse(status_code=200, payload={"continue_url": "/log-in/password"})
+        if url.endswith("/api/accounts/password/verify"):
+            return FakeResponse(
+                status_code=409,
+                payload={
+                    "continue_url": "/email-verification",
+                    "page": {"type": "email_otp_verification"},
+                },
+            )
+        if url.endswith("/api/accounts/email-otp/validate"):
+            return FakeResponse(
+                status_code=200,
+                payload={
+                    "continue_url": "/add-phone",
+                    "page": {"type": "add_phone"},
+                },
+            )
+        return FakeResponse(status_code=200, payload={})
+
+
 class CodexManualOtpFlowTests(unittest.TestCase):
     """Codex 手填验证码流程测试。AI by zb"""
 
@@ -345,7 +382,42 @@ class CodexManualOtpFlowTests(unittest.TestCase):
 
         self.assertIsNone(code)
         self.assertEqual(session.get.call_count, 3)
-        self.assertEqual([call.args[0] for call in sleep_mock.call_args_list], [2, 15])
+        self.assertEqual([call.args[0] for call in sleep_mock.call_args_list], [15, 15])
+
+    def test_add_phone_after_otp_retries_authorize_without_consent_post(self) -> None:
+        """OTP 后进入 add-phone 时应重触发 authorize 而不是提交 consent。AI by zb"""
+        from app.codex import _runtime_impl
+
+        fake_session = AddPhoneAfterOtpSession()
+        otp_provider = Mock(return_value="123456")
+        expected_tokens = {
+            "access_token": "access-token",
+            "refresh_token": "refresh-token",
+            "id_token": "id-token",
+        }
+
+        with patch.object(_runtime_impl, "create_session", return_value=fake_session), patch.object(
+            _runtime_impl,
+            "build_sentinel_token",
+            return_value="sentinel-token",
+        ), patch.object(_runtime_impl.time, "sleep") as sleep_mock, patch.object(
+            _runtime_impl,
+            "_exchange_code_for_token",
+            return_value=expected_tokens,
+        ) as exchange_mock:
+            tokens = _runtime_impl.perform_http_oauth_login(
+                email="thirdparty@example.com",
+                password="secret-pass",
+                otp_mode="manual",
+                otp_provider=otp_provider,
+            )
+
+        self.assertEqual(tokens, expected_tokens)
+        exchange_mock.assert_called_once()
+        self.assertEqual(exchange_mock.call_args.args[0], "retry-code")
+        self.assertIn(15, [call.args[0] for call in sleep_mock.call_args_list])
+        consent_posts = [url for url, _kwargs in fake_session.posts if "consent" in url]
+        self.assertEqual(consent_posts, [])
 
 
 if __name__ == "__main__":
