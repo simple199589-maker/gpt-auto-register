@@ -912,6 +912,80 @@ def _extract_code_from_url(url: str) -> Optional[str]:
         return None
 
 
+def _walk_json_for_state_nonce(obj: Any) -> Tuple[Optional[str], Optional[str]]:
+    """
+    在任意 JSON 结构里递归查找 state / nonce 字段。
+
+    参数:
+        obj: JSON 反序列化后的对象
+    返回:
+        Tuple[Optional[str], Optional[str]]: (state, nonce)
+        AI by zb
+    """
+    state_val: Optional[str] = None
+    nonce_val: Optional[str] = None
+    stack: List[Any] = [obj]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, dict):
+            for key, value in current.items():
+                if isinstance(value, (dict, list)):
+                    stack.append(value)
+                    continue
+                if not isinstance(value, str) or not value:
+                    continue
+                lowered = str(key).lower()
+                if state_val is None and lowered in {"state", "oauth_state", "auth_state"}:
+                    state_val = value
+                elif nonce_val is None and lowered in {"nonce", "oauth_nonce", "auth_nonce"}:
+                    nonce_val = value
+                if state_val and nonce_val:
+                    return state_val, nonce_val
+        elif isinstance(current, list):
+            stack.extend(current)
+    return state_val, nonce_val
+
+
+def _extract_consent_state_nonce(html: str) -> Tuple[Optional[str], Optional[str], List[str]]:
+    """
+    从 consent 页 HTML 中提取 state / nonce，兼容 Next.js __NEXT_DATA__ 与原始正则。
+
+    参数:
+        html: consent 页 HTML 全文
+    返回:
+        Tuple[Optional[str], Optional[str], List[str]]: (state, nonce, __NEXT_DATA__ 顶层键列表)
+        AI by zb
+    """
+    state_val: Optional[str] = None
+    nonce_val: Optional[str] = None
+    next_data_keys: List[str] = []
+
+    next_data_match = re.search(
+        r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>',
+        html,
+        re.DOTALL,
+    )
+    if next_data_match:
+        try:
+            payload = json.loads(next_data_match.group(1))
+            if isinstance(payload, dict):
+                next_data_keys = list(payload.keys())
+                state_val, nonce_val = _walk_json_for_state_nonce(payload)
+        except Exception:
+            pass
+
+    if not state_val:
+        legacy_state = re.search(r'["\']state["\']:\s*["\']([^"\' ]+)["\']', html)
+        if legacy_state:
+            state_val = legacy_state.group(1)
+    if not nonce_val:
+        legacy_nonce = re.search(r'["\']nonce["\']:\s*["\']([^"\' ]+)["\']', html)
+        if legacy_nonce:
+            nonce_val = legacy_nonce.group(1)
+
+    return state_val, nonce_val, next_data_keys
+
+
 def _follow_and_extract_code(
     session: requests.Session,
     url: str,
@@ -932,6 +1006,12 @@ def _follow_and_extract_code(
     """
     if max_depth <= 0:
         return None
+    if not url:
+        return None
+    if url.startswith("/"):
+        url = f"{oauth_issuer}{url}"
+    elif not url.startswith("http"):
+        return None
     try:
         response = session.get(
             url,
@@ -945,6 +1025,8 @@ def _follow_and_extract_code(
             code = _extract_code_from_url(location)
             if code:
                 return code
+            if not location:
+                return None
             if location.startswith("/"):
                 location = f"{oauth_issuer}{location}"
             return _follow_and_extract_code(session, location, oauth_issuer, max_depth - 1)
@@ -1049,9 +1131,10 @@ def _retry_authorize_for_code(
                 logger.info("[Codex] authorize 重试获取 auth_code 成功 | attempt=%d | email=%s", attempt, email)
                 return code
             logger.info(
-                "[Codex] authorize 重试未获取 auth_code | HTTP %s | url=%s | attempt=%d | email=%s",
+                "[Codex] authorize 重试未获取 auth_code | HTTP %s | url=%s | location=%s | attempt=%d | email=%s",
                 response.status_code,
                 str(response.url)[:120],
+                str(location)[:200],
                 attempt,
                 email,
             )
@@ -1570,58 +1653,94 @@ def perform_http_oauth_login(
 
     if is_consent_url:
         try:
+            consent_get_headers = dict(NAVIGATE_HEADERS)
+            consent_get_headers["referer"] = f"{oauth_issuer}/email-verification"
             response_consent = session.get(
                 consent_url,
-                headers=NAVIGATE_HEADERS,
+                headers=consent_get_headers,
                 verify=False,
                 timeout=30,
                 allow_redirects=False,
+            )
+            active_logger.info(
+                "[Codex] consent GET: HTTP %s | url=%s | location=%s | email=%s",
+                response_consent.status_code,
+                consent_url[:120],
+                str(response_consent.headers.get("Location", ""))[:200],
+                email,
             )
             if response_consent.status_code in (301, 302, 303, 307, 308):
                 location = response_consent.headers.get("Location", "")
                 auth_code = _extract_code_from_url(location)
                 if not auth_code:
                     auth_code = _follow_and_extract_code(session, location, oauth_issuer)
+                if not auth_code:
+                    active_logger.info(
+                        "[Codex] consent GET 重定向未带 code 且跟随后仍未提取到 | location=%s | email=%s",
+                        str(location)[:200],
+                        email,
+                    )
             elif response_consent.status_code == 200:
                 html = response_consent.text
-                state_match = re.search(r'["\']state["\']:\s*["\']([^"\' ]+)["\']', html)
-                nonce_match = re.search(r'["\']nonce["\']:\s*["\']([^"\' ]+)["\']', html)
-                consent_payload = {"action": "allow"}
-                if state_match:
-                    consent_payload["state"] = state_match.group(1)
-                if nonce_match:
-                    consent_payload["nonce"] = nonce_match.group(1)
-                consent_headers = {
-                    "accept": "application/json, text/plain, */*",
-                    "content-type": "application/json",
-                    "origin": oauth_issuer,
-                    "referer": consent_url,
-                    "user-agent": USER_AGENT,
-                    "oai-device-id": device_id,
-                }
-                post_consent = session.post(
-                    consent_url,
-                    json=consent_payload,
-                    headers=consent_headers,
-                    verify=False,
-                    timeout=30,
-                    allow_redirects=False,
+                state_value, nonce_value, next_data_keys = _extract_consent_state_nonce(html)
+                active_logger.info(
+                    "[Codex] consent GET 200 | html_len=%d | has_state=%s | has_nonce=%s | next_data_keys=%s | preview=%s | email=%s",
+                    len(html),
+                    bool(state_value),
+                    bool(nonce_value),
+                    str(next_data_keys)[:200],
+                    html[:200].replace("\n", " ").replace("\r", " "),
+                    email,
                 )
-                if post_consent.status_code in (301, 302, 303, 307, 308):
-                    location = post_consent.headers.get("Location", "")
-                    auth_code = _extract_code_from_url(location)
-                    if not auth_code:
-                        consent_url = location if location.startswith("http") else f"{oauth_issuer}{location}"
-                elif post_consent.status_code == 200:
-                    try:
-                        consent_data = post_consent.json()
-                        redirect_to = str(consent_data.get("redirectTo") or consent_data.get("redirect_url") or "")
-                        if redirect_to:
-                            auth_code = _extract_code_from_url(redirect_to)
-                            if not auth_code:
-                                consent_url = redirect_to
-                    except Exception:
-                        pass
+                if state_value or nonce_value:
+                    consent_payload: Dict[str, str] = {"action": "allow"}
+                    if state_value:
+                        consent_payload["state"] = state_value
+                    if nonce_value:
+                        consent_payload["nonce"] = nonce_value
+                    consent_headers = {
+                        "accept": "application/json, text/plain, */*",
+                        "content-type": "application/json",
+                        "origin": oauth_issuer,
+                        "referer": consent_url,
+                        "user-agent": USER_AGENT,
+                        "oai-device-id": device_id,
+                    }
+                    post_consent = session.post(
+                        consent_url,
+                        json=consent_payload,
+                        headers=consent_headers,
+                        verify=False,
+                        timeout=30,
+                        allow_redirects=False,
+                    )
+                    active_logger.info(
+                        "[Codex] consent POST: HTTP %s | location=%s | body=%s | email=%s",
+                        post_consent.status_code,
+                        str(post_consent.headers.get("Location", ""))[:200],
+                        str(post_consent.text)[:300].replace("\n", " ").replace("\r", " "),
+                        email,
+                    )
+                    if post_consent.status_code in (301, 302, 303, 307, 308):
+                        location = post_consent.headers.get("Location", "")
+                        auth_code = _extract_code_from_url(location)
+                        if not auth_code:
+                            consent_url = location if location.startswith("http") else f"{oauth_issuer}{location}"
+                    elif post_consent.status_code == 200:
+                        try:
+                            consent_data = post_consent.json()
+                            redirect_to = str(consent_data.get("redirectTo") or consent_data.get("redirect_url") or "")
+                            if redirect_to:
+                                auth_code = _extract_code_from_url(redirect_to)
+                                if not auth_code:
+                                    consent_url = redirect_to
+                        except Exception:
+                            pass
+                else:
+                    active_logger.info(
+                        "[Codex] consent 页未发现 state/nonce，跳过 page-URL POST 改走 workspace/select fallback | email=%s",
+                        email,
+                    )
             else:
                 auth_code = _extract_code_from_url(str(response_consent.url))
                 if not auth_code:
@@ -1630,8 +1749,8 @@ def perform_http_oauth_login(
             match = re.search(r"(https?://localhost[^\s'\"]+)", str(exc))
             if match:
                 auth_code = _extract_code_from_url(match.group(1))
-        except Exception:
-            pass
+        except Exception as exc:
+            active_logger.warning("[Codex] consent 流程异常: %s | email=%s", exc, email)
 
     if not auth_code:
         session_data = decode_auth_session_cookie(session)
@@ -1653,6 +1772,13 @@ def perform_http_oauth_login(
                     verify=False,
                     timeout=30,
                     allow_redirects=False,
+                )
+                active_logger.info(
+                    "[Codex] workspace/select POST: HTTP %s | location=%s | body=%s | email=%s",
+                    response_workspace.status_code,
+                    str(response_workspace.headers.get("Location", ""))[:200],
+                    str(response_workspace.text)[:300].replace("\n", " ").replace("\r", " "),
+                    email,
                 )
                 if response_workspace.status_code in (301, 302, 303, 307, 308):
                     location = response_workspace.headers.get("Location", "")
@@ -1720,8 +1846,8 @@ def perform_http_oauth_login(
                             else f"{oauth_issuer}{workspace_next}"
                         )
                         auth_code = _follow_and_extract_code(session, full_next, oauth_issuer)
-            except Exception:
-                pass
+            except Exception as exc:
+                active_logger.warning("[Codex] workspace/select 流程异常: %s | email=%s", exc, email)
 
     if not auth_code:
         try:
@@ -1731,6 +1857,17 @@ def perform_http_oauth_login(
                 verify=False,
                 timeout=30,
                 allow_redirects=True,
+            )
+            history_chain = " -> ".join(
+                f"{h.status_code}:{(h.headers.get('Location') or '')[:80]}"
+                for h in (response_fallback.history or [])
+            )
+            active_logger.info(
+                "[Codex] consent 跟随重定向 fallback: HTTP %s | final_url=%s | history=%s | email=%s",
+                response_fallback.status_code,
+                str(response_fallback.url)[:200],
+                history_chain[:300] or "<empty>",
+                email,
             )
             auth_code = _extract_code_from_url(str(response_fallback.url))
             if not auth_code and response_fallback.history:
@@ -1743,8 +1880,8 @@ def perform_http_oauth_login(
             match = re.search(r"(https?://localhost[^\s'\"]+)", str(exc))
             if match:
                 auth_code = _extract_code_from_url(match.group(1))
-        except Exception:
-            pass
+        except Exception as exc:
+            active_logger.warning("[Codex] consent fallback 跟随异常: %s | email=%s", exc, email)
 
     if not auth_code:
         auth_code = _retry_authorize_for_code(

@@ -3,7 +3,7 @@ name = "chatgpt-auto-register"
 version = "0.1.0"
 description = "Account login verification and Sub2Api upload tool."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = "~=3.11"
 dependencies = [
     "faker>=40.1.0",
     "flask>=3.1.2",

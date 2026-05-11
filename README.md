@@ -8,6 +8,7 @@
 ## 快速开始
 
 ```bash
+python -V = 3.11
 pip install uv
 uv sync
 cp config.example.yaml config.yaml

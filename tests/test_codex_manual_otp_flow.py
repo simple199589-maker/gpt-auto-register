@@ -384,6 +384,53 @@ class CodexManualOtpFlowTests(unittest.TestCase):
         self.assertEqual(session.get.call_count, 3)
         self.assertEqual([call.args[0] for call in sleep_mock.call_args_list], [15, 15])
 
+    def test_extract_consent_state_nonce_handles_next_data(self) -> None:
+        """consent 页若是 Next.js __NEXT_DATA__ 应能解析出 state/nonce。AI by zb"""
+        from app.codex import _runtime_impl
+
+        html = (
+            '<html><head></head><body>'
+            '<script id="__NEXT_DATA__" type="application/json">'
+            '{"props":{"pageProps":{"state":"abc123","nonce":"xyz789",'
+            '"client":{"name":"Codex"}}},"buildId":"build-1"}'
+            '</script></body></html>'
+        )
+        state, nonce, keys = _runtime_impl._extract_consent_state_nonce(html)
+        self.assertEqual(state, "abc123")
+        self.assertEqual(nonce, "xyz789")
+        self.assertIn("props", keys)
+        self.assertIn("buildId", keys)
+
+    def test_extract_consent_state_nonce_falls_back_to_legacy_regex(self) -> None:
+        """没有 __NEXT_DATA__ 时仍应能从老式内联 JSON 抠出 state/nonce。AI by zb"""
+        from app.codex import _runtime_impl
+
+        html = 'var consent = { "state": "old-state", "nonce": "old-nonce" };'
+        state, nonce, keys = _runtime_impl._extract_consent_state_nonce(html)
+        self.assertEqual(state, "old-state")
+        self.assertEqual(nonce, "old-nonce")
+        self.assertEqual(keys, [])
+
+    def test_follow_and_extract_code_handles_relative_url(self) -> None:
+        """传入相对路径时也应能正确拼接 oauth_issuer 并发起请求。AI by zb"""
+        from app.codex import _runtime_impl
+
+        session = Mock()
+        session.get.return_value = FakeResponse(
+            status_code=302,
+            headers={"Location": "http://localhost:1455/auth/callback?code=relpath-code&state=s"},
+        )
+
+        code = _runtime_impl._follow_and_extract_code(
+            session,
+            "/oauth/authorize?response_type=code",
+            "https://auth.openai.com",
+        )
+
+        self.assertEqual(code, "relpath-code")
+        called_url = session.get.call_args.args[0]
+        self.assertTrue(called_url.startswith("https://auth.openai.com/"))
+
     def test_add_phone_after_otp_retries_authorize_without_consent_post(self) -> None:
         """OTP 后进入 add-phone 时应重触发 authorize 而不是提交 consent。AI by zb"""
         from app.codex import _runtime_impl

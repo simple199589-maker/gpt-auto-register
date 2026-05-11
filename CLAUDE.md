@@ -8,11 +8,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Common commands
 - Install or refresh dependencies: `pip install uv && uv sync`
+- Create a local config before running locally: `cp config.example.yaml config.yaml`
 - Run the web console: `uv run server.py`
 - Run the web console on another port: `uv run server.py --port 5006`
 - Select a different `activation_api.base_url` index: `uv run server.py --api 1`
 - Run the batch login/upload entrypoint: `uv run main.py`
 - Run the Codex login CLI: `uv run codex_login_tool.py --email ... --password ... --otp-mode auto`
+- Manually exercise the login/Sub2Api orchestration: `uv run python scripts/manual/login_sub2api_manual_test.py import --email ... --password ...`, then `login --email ... --otp-mode auto` or `upload --email ...`
+- Manually exercise email providers: `uv run python scripts/manual/email_service_manual_test.py create --provider worker` or `fetch --provider outlook --email ...`
 - Run all tests: `uv run python -m unittest discover -s tests`
 - Run one test module: `uv run python -m unittest tests.test_login_sub2api`
 - Run one test method: `uv run python -m unittest tests.test_web_server_login_sub2api.WebServerLoginSub2ApiTests.test_login_endpoint_passes_otp_mode_and_upload_targets`
@@ -28,6 +31,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - [app/account_actions.py](app/account_actions.py) contains the legacy/manual account actions: status edits, deletion, delivery mail, Plus/Team retry paths, and Sub2Api re-upload helpers. It still depends on browser automation and Codex runtime helpers.
 - [app/codex/](app/codex/) holds the OAuth and token/upload plumbing. `runtime.py` re-exports the CLI/auth/token helpers, `auth.py` handles the HTTP OAuth flow, `tokens.py` handles token persistence and Sub2Api upload, and `otp.py` handles mailbox-context OTP helpers.
 - [app/email_service.py](app/email_service.py) dispatches between the worker provider and Outlook provider; [app/outlook_email_service.py](app/outlook_email_service.py) is the Outlook Mail Station integration.
+- [app/team_manage.py](app/team_manage.py) integrates with Team management for importing mother accounts using saved OAuth token data and `X-API-Key` auth.
 - [app/browser/](app/browser/) is Selenium-based automation for the older browser-driven registration/activation paths that still support some compatibility flows.
 - The front-end is a static single-page console in [app/static/index.html](app/static/index.html), [app/static/script.js](app/static/script.js), and [app/static/style.css](app/static/style.css). Its payload shapes come from `sanitize_account_record_for_web()` and the dashboard stats builders in `app.account_store`.
 - Tests are standard-library `unittest` modules under [tests/](tests/), not pytest-based.
