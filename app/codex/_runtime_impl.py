@@ -49,16 +49,17 @@ OAUTH_SCOPE = "openid profile email offline_access"
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/145.0.0.0 Safari/537.36"
+    "Chrome/148.0.0.0 Safari/537.36"
 )
+SEC_CH_UA = '"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"'
 
 COMMON_HEADERS: Dict[str, str] = {
     "accept": "application/json",
-    "accept-language": "en-US,en;q=0.9",
+    "accept-language": "zh-CN,zh;q=0.9",
     "content-type": "application/json",
     "origin": OPENAI_AUTH_BASE,
     "user-agent": USER_AGENT,
-    "sec-ch-ua": '"Google Chrome";v="145", "Not?A_Brand";v="8", "Chromium";v="145"',
+    "sec-ch-ua": SEC_CH_UA,
     "sec-ch-ua-mobile": "?0",
     "sec-ch-ua-platform": '"Windows"',
     "sec-fetch-dest": "empty",
@@ -72,7 +73,7 @@ AUTH_JSON_HEADERS: Dict[str, str] = {
     "content-type": "application/json",
     "priority": "u=1, i",
     "user-agent": USER_AGENT,
-    "sec-ch-ua": COMMON_HEADERS["sec-ch-ua"],
+    "sec-ch-ua": SEC_CH_UA,
     "sec-ch-ua-mobile": COMMON_HEADERS["sec-ch-ua-mobile"],
     "sec-ch-ua-platform": COMMON_HEADERS["sec-ch-ua-platform"],
     "sec-fetch-dest": "empty",
@@ -82,9 +83,9 @@ AUTH_JSON_HEADERS: Dict[str, str] = {
 
 NAVIGATE_HEADERS: Dict[str, str] = {
     "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "accept-language": "en-US,en;q=0.9",
+    "accept-language": "zh-CN,zh;q=0.9",
     "user-agent": USER_AGENT,
-    "sec-ch-ua": COMMON_HEADERS["sec-ch-ua"],
+    "sec-ch-ua": SEC_CH_UA,
     "sec-ch-ua-mobile": "?0",
     "sec-ch-ua-platform": '"Windows"',
     "sec-fetch-dest": "document",
@@ -382,11 +383,11 @@ class SentinelTokenGenerator:
             4294705152,
             random.random(),
             USER_AGENT,
-            "https://sentinel.openai.com/sentinel/20260124ceb8/sdk.js",
+            "https://sentinel.openai.com/sentinel/20260219f9f6/sdk.js",
             None,
             None,
-            "en-US",
-            "en-US,en",
+            "zh-CN",
+            "zh-CN,zh",
             random.random(),
             "vendorSub−undefined",
             "location",
@@ -459,7 +460,7 @@ def fetch_sentinel_challenge(
         "Referer": "https://sentinel.openai.com/backend-api/sentinel/frame.html",
         "User-Agent": USER_AGENT,
         "Origin": "https://sentinel.openai.com",
-        "sec-ch-ua": '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"',
+        "sec-ch-ua": SEC_CH_UA,
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": '"Windows"',
     }
@@ -629,6 +630,11 @@ def create_mailbox_marker() -> int:
     return int(time.time() * 1000)
 
 
+def create_mailbox_marker_with_skew(skew_seconds: int = 30) -> int:
+    return int((time.time() - max(int(skew_seconds or 0), 0)) * 1000)
+
+
+
 def prompt_for_email_otp(
     email: str,
     logger: Optional[logging.Logger] = None,
@@ -738,7 +744,7 @@ def extract_workspace_id(payload: Any) -> Optional[str]:
         if workspace_id:
             return workspace_id
 
-    for key in ("data", "items", "results", "value"):
+    for key in ("client_auth_session", "data", "items", "results", "value"):
         nested = payload.get(key)
         found = extract_workspace_id(nested)
         if found:
@@ -892,6 +898,38 @@ def ensure_workspace_context(
             time.sleep(1)
 
     return session_data, workspace_id
+
+
+def dump_client_auth_session(
+    session: requests.Session,
+    oauth_issuer: str,
+    referer: str,
+    email: str,
+    logger: logging.Logger,
+) -> Optional[Dict[str, Any]]:
+    headers = dict(AUTH_JSON_HEADERS)
+    headers.pop("content-type", None)
+    headers["referer"] = referer
+    try:
+        response = session.get(
+            f"{oauth_issuer}/api/accounts/client_auth_session_dump",
+            headers=headers,
+            verify=False,
+            timeout=20,
+        )
+        logger.info(
+            "[Codex] client_auth_session_dump: HTTP %s | referer=%s | body=%s | email=%s",
+            response.status_code,
+            referer[:100],
+            response.text[:300].replace("\n", " ").replace("\r", " "),
+            email,
+        )
+        if response.status_code == 200:
+            data = response.json()
+            return data if isinstance(data, dict) else None
+    except Exception as exc:
+        logger.warning("[Codex] client_auth_session_dump 异常: %s | email=%s", exc, email)
+    return None
 
 
 def _extract_code_from_url(url: str) -> Optional[str]:
@@ -1086,7 +1124,7 @@ def _retry_authorize_for_code(
     oauth_issuer: str,
     email: str,
     logger: logging.Logger,
-    attempts: int = 3,
+    attempts: int = 1,
     retry_delays: Optional[list[int]] = None,
     initial_delay: int = 0,
 ) -> Optional[str]:
@@ -1106,7 +1144,7 @@ def _retry_authorize_for_code(
         Optional[str]: OAuth code
         AI by zb
     """
-    delays = list(retry_delays) if retry_delays is not None else [15, 15]
+    delays = list(retry_delays) if retry_delays is not None else []
     first_delay = max(int(initial_delay or 0), 0)
     if first_delay > 0:
         logger.info("[Codex] 等待 %d 秒后首次重试获取 auth_code | email=%s", first_delay, email)
@@ -1288,21 +1326,26 @@ def perform_http_oauth_login(
     effective_otp_wait_timeout = max(int(otp_wait_timeout or 60), 1)
     normalized_password = str(password or "").strip()
     passwordless_login = not normalized_password
+    if passwordless_login and str(otp_mode or "").strip().lower() == "auto":
+        effective_otp_wait_timeout = max(effective_otp_wait_timeout, 300)
 
     session.cookies.set("oai-did", device_id, domain=".auth.openai.com")
     session.cookies.set("oai-did", device_id, domain="auth.openai.com")
 
     code_verifier, code_challenge = generate_pkce()
     state = secrets.token_urlsafe(32)
+    mailbox_marker = create_mailbox_marker_with_skew(30)
 
     active_logger.info("[Codex] Step A: authorize | email=%s", email)
     authorize_params = {
-        "response_type": "code",
         "client_id": oauth_client_id,
-        "redirect_uri": oauth_redirect_uri,
-        "scope": OAUTH_SCOPE,
         "code_challenge": code_challenge,
         "code_challenge_method": "S256",
+        "codex_cli_simplified_flow": "true",
+        "id_token_add_organizations": "true",
+        "redirect_uri": oauth_redirect_uri,
+        "response_type": "code",
+        "scope": OAUTH_SCOPE,
         "state": state,
     }
     authorize_url = f"{oauth_issuer}/oauth/authorize?{urlencode(authorize_params)}"
@@ -1320,8 +1363,9 @@ def perform_http_oauth_login(
     active_logger.info("[Codex] Step B: 提交邮箱 | email=%s", email)
     headers = dict(COMMON_HEADERS)
     headers["referer"] = f"{oauth_issuer}/log-in"
-    headers["oai-device-id"] = device_id
-    headers.update(generate_datadog_trace())
+    if not passwordless_login:
+        headers["oai-device-id"] = device_id
+        headers.update(generate_datadog_trace())
 
     sentinel_email = build_sentinel_token(session, device_id, flow="authorize_continue")
     if not sentinel_email:
@@ -1348,6 +1392,13 @@ def perform_http_oauth_login(
             page_type,
             email,
         )
+    dump_client_auth_session(
+        session=session,
+        oauth_issuer=oauth_issuer,
+        referer=f"{oauth_issuer}/log-in",
+        email=email,
+        logger=active_logger,
+    )
 
     is_step_b_otp_challenge = page_type == "email_otp_verification" or "email-verification" in continue_url
     if passwordless_login and not is_step_b_otp_challenge:
@@ -1407,7 +1458,6 @@ def perform_http_oauth_login(
     if page_type == "email_otp_verification" or "email-verification" in continue_url:
         active_logger.info("[Codex] Step D: 需要 OTP 验证 | email=%s", email)
         verification_url = continue_url if continue_url.startswith("http") else f"{oauth_issuer}{continue_url}"
-        mailbox_marker = create_mailbox_marker()
 
         try:
             verification_response = session.get(
@@ -1430,7 +1480,8 @@ def perform_http_oauth_login(
         verify_headers = build_auth_json_headers(
             referer=f"{oauth_issuer}/email-verification",
             device_id=device_id,
-            include_device_id=True,
+            include_datadog=not passwordless_login,
+            include_device_id=not passwordless_login,
         )
 
         def send_email_otp(action_label: str) -> Tuple[bool, str]:
@@ -1480,14 +1531,20 @@ def perform_http_oauth_login(
                 logger=active_logger,
             )
             if not otp_code:
-                send_email_otp("OTP fallback send")
-                otp_code = _wait_auto_otp(
-                    email=email,
-                    mailbox_context=resolved_mailbox_context,
-                    since_marker=mailbox_marker,
-                    timeout=effective_otp_wait_timeout,
-                    logger=active_logger,
-                )
+                if passwordless_login:
+                    active_logger.warning(
+                        "[Codex] 未收到初始 passwordless OTP，跳过 email-otp/send fallback 以避免进入 onboarding/add-phone | email=%s",
+                        email,
+                    )
+                else:
+                    send_email_otp("OTP fallback send")
+                    otp_code = _wait_auto_otp(
+                        email=email,
+                        mailbox_context=resolved_mailbox_context,
+                        since_marker=mailbox_marker,
+                        timeout=effective_otp_wait_timeout,
+                        logger=active_logger,
+                    )
 
         if not otp_code and otp_mode == "manual":
             def resend_manual_otp() -> Tuple[bool, str]:
@@ -1498,6 +1555,8 @@ def perform_http_oauth_login(
                     Tuple[bool, str]: 是否成功与提示
                     AI by zb
                 """
+                if passwordless_login:
+                    return False, "passwordless Codex 登录不自动重发验证码，避免进入 add-phone/onboarding"
                 return send_email_otp("手填 OTP 重发")
 
             if otp_provider:
@@ -1540,6 +1599,13 @@ def perform_http_oauth_login(
             continue_url[:120],
             page_type,
             email,
+        )
+        dump_client_auth_session(
+            session=session,
+            oauth_issuer=oauth_issuer,
+            referer=f"{oauth_issuer}/email-verification",
+            email=email,
+            logger=active_logger,
         )
 
     auth_session_data = decode_auth_session_cookie(session)
@@ -1634,6 +1700,8 @@ def perform_http_oauth_login(
         continue_url = f"{oauth_issuer}/sign-in-with-chatgpt/codex/consent"
     if not continue_url or "email-verification" in continue_url:
         return fail_oauth_login(f"OTP 后仍未进入 Codex 授权页: {continue_url or '无 continue_url'}", active_logger, email)
+    if "add-phone" in continue_url.lower():
+        return fail_oauth_login(f"OTP 后进入 add-phone，停止当前登录流程: {continue_url}", active_logger, email)
 
     consent_url = f"{oauth_issuer}{continue_url}" if continue_url.startswith("/") else continue_url
     auth_code = None
@@ -1651,7 +1719,7 @@ def perform_http_oauth_login(
             oauth_issuer=oauth_issuer,
             email=email,
             logger=active_logger,
-            initial_delay=15,
+            initial_delay=0,
         )
 
     if is_consent_url:
@@ -1758,6 +1826,15 @@ def perform_http_oauth_login(
     if not auth_code:
         session_data = decode_auth_session_cookie(session)
         workspace_id = extract_workspace_id(session_data)
+        if not workspace_id:
+            dump_data = dump_client_auth_session(
+                session=session,
+                oauth_issuer=oauth_issuer,
+                referer=consent_url,
+                email=email,
+                logger=active_logger,
+            )
+            workspace_id = extract_workspace_id(dump_data)
         if session_data:
             active_logger.info(
                 "[Codex] auth-session snapshots: %s | email=%s",
@@ -1768,31 +1845,64 @@ def perform_http_oauth_login(
         if workspace_id:
             workspace_headers = build_auth_json_headers(referer=consent_url, device_id=device_id)
             try:
-                response_workspace = session.post(
-                    f"{oauth_issuer}/api/accounts/workspace/select",
-                    json={"workspace_id": workspace_id},
-                    headers=workspace_headers,
-                    verify=False,
-                    timeout=30,
-                    allow_redirects=False,
-                )
-                active_logger.info(
-                    "[Codex] workspace/select POST: HTTP %s | location=%s | body=%s | email=%s",
-                    response_workspace.status_code,
-                    str(response_workspace.headers.get("Location", ""))[:200],
-                    str(response_workspace.text)[:300].replace("\n", " ").replace("\r", " "),
-                    email,
-                )
+                response_workspace = None
+                for workspace_attempt in range(1, 2):
+                    response_workspace = session.post(
+                        f"{oauth_issuer}/api/accounts/workspace/select",
+                        json={"workspace_id": workspace_id},
+                        headers=workspace_headers,
+                        verify=False,
+                        timeout=30,
+                        allow_redirects=False,
+                    )
+                    active_logger.info(
+                        "[Codex] workspace/select POST: HTTP %s | location=%s | body=%s | attempt=%d | email=%s",
+                        response_workspace.status_code,
+                        str(response_workspace.headers.get("Location", ""))[:200],
+                        str(response_workspace.text)[:300].replace("\n", " ").replace("\r", " "),
+                        workspace_attempt,
+                        email,
+                    )
+                    if not (
+                        response_workspace.status_code == 400
+                        and "no_valid_organizations" in response_workspace.text
+                        and workspace_attempt < 1
+                    ):
+                        break
+                    dump_client_auth_session(
+                        session=session,
+                        oauth_issuer=oauth_issuer,
+                        referer=consent_url,
+                        email=email,
+                        logger=active_logger,
+                    )
+                    time.sleep(3 * workspace_attempt)
+                if response_workspace is None:
+                    raise RuntimeError("workspace/select 未返回响应")
                 if response_workspace.status_code in (301, 302, 303, 307, 308):
                     location = response_workspace.headers.get("Location", "")
                     auth_code = _extract_code_from_url(location)
                     if not auth_code:
                         auth_code = _follow_and_extract_code(session, location, oauth_issuer)
+                elif response_workspace.status_code == 400 and "no_valid_organizations" in response_workspace.text:
+                    active_logger.warning(
+                        "[Codex] workspace/select 暂无有效组织，继续尝试 authorize/consent fallback | email=%s",
+                        email,
+                    )
                 elif response_workspace.status_code == 200:
                     workspace_data = response_workspace.json()
                     workspace_next = str(workspace_data.get("continue_url") or "")
                     workspace_page = str(((workspace_data.get("page") or {}).get("type")) or "")
-                    if "organization" in workspace_next or "organization" in workspace_page:
+                    if workspace_next:
+                        full_next = (
+                            workspace_next
+                            if workspace_next.startswith("http")
+                            else f"{oauth_issuer}{workspace_next}"
+                        )
+                        auth_code = _follow_and_extract_code(session, full_next, oauth_issuer)
+                    if not auth_code:
+                        auth_code = _follow_and_extract_code(session, authorize_url, oauth_issuer)
+                    if not auth_code and ("organization" in workspace_next or "organization" in workspace_page):
                         organization_url = (
                             workspace_next if workspace_next.startswith("http") else f"{oauth_issuer}{workspace_next}"
                         )
@@ -1842,13 +1952,6 @@ def perform_http_oauth_login(
                                     auth_code = _follow_and_extract_code(session, full_next, oauth_issuer)
                         else:
                             auth_code = _follow_and_extract_code(session, organization_url, oauth_issuer)
-                    elif workspace_next:
-                        full_next = (
-                            workspace_next
-                            if workspace_next.startswith("http")
-                            else f"{oauth_issuer}{workspace_next}"
-                        )
-                        auth_code = _follow_and_extract_code(session, full_next, oauth_issuer)
             except Exception as exc:
                 active_logger.warning("[Codex] workspace/select 流程异常: %s | email=%s", exc, email)
 
@@ -1978,6 +2081,12 @@ def upload_to_sub2api(
         build_sub2api_config(config),
         active_logger,
     )
+    try:
+        from app.web_server import get_cached_sub2api_bearer
+
+        uploader.set_bearer_provider(get_cached_sub2api_bearer)
+    except Exception:
+        pass
     return uploader.push_account(email, tokens)
 
 

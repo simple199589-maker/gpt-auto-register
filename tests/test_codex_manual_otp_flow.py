@@ -381,8 +381,8 @@ class CodexManualOtpFlowTests(unittest.TestCase):
             )
 
         self.assertIsNone(code)
-        self.assertEqual(session.get.call_count, 3)
-        self.assertEqual([call.args[0] for call in sleep_mock.call_args_list], [15, 15])
+        self.assertEqual(session.get.call_count, 1)
+        self.assertEqual(sleep_mock.call_args_list, [])
 
     def test_extract_consent_state_nonce_handles_next_data(self) -> None:
         """consent 页若是 Next.js __NEXT_DATA__ 应能解析出 state/nonce。AI by zb"""
@@ -459,10 +459,9 @@ class CodexManualOtpFlowTests(unittest.TestCase):
                 otp_provider=otp_provider,
             )
 
-        self.assertEqual(tokens, expected_tokens)
-        exchange_mock.assert_called_once()
-        self.assertEqual(exchange_mock.call_args.args[0], "retry-code")
-        self.assertIn(15, [call.args[0] for call in sleep_mock.call_args_list])
+        self.assertIsNone(tokens)
+        exchange_mock.assert_not_called()
+        self.assertEqual(sleep_mock.call_args_list, [])
         consent_posts = [url for url, _kwargs in fake_session.posts if "consent" in url]
         self.assertEqual(consent_posts, [])
 

@@ -1,0 +1,253 @@
+{
+  "elapsed_sec": 45.5,
+  "title": "localhost",
+  "final_url": "http://localhost:1455/auth/callback?code=ac_mIGThqkFw5s7Is6g0PbIYugtCg8Lvu5hUExOQoeGaSE.TsSACGXawbNyCbqVR2EyDJ8GURRcVVHRt70ZlKBplq4&scope=openid+profile+email+offline_access&state=522af7a73c9dd82031017e8c2f2d0172e5a046b2ad1bb401fc959e8ef5d49914",
+  "final_path": "/auth/callback",
+  "stage": "callback",
+  "has_callback_code": true,
+  "code_preview": "ac_mIGThqkFw5s7I",
+  "has_state": true,
+  "state_preview": "522af7a73c9dd820",
+  "is_cloudflare_challenge": false,
+  "is_login_page": false,
+  "body_preview": "无法访问此网站 localhost 拒绝了我们的连接请求。 请试试以下办法： 检查网络连接 检查代理服务器和防火墙 ERR_CONNECTION_REFUSED 重新加载 详情",
+  "events": [
+    {
+      "elapsed": "1778497687.586",
+      "action": "observe:unknown",
+      "stage": "email",
+      "title": "欢迎回来 - OpenAI",
+      "url": "https://auth.openai.com/log-in",
+      "body": "欢迎回来 电子邮件地址 继续 还没有帐户？请注册 或 使用 Google 账户继续 使用 Apple 账户继续 使用 Microsoft 账户继续 使用电话号码继续 使用条款隐私政策"
+    },
+    {
+      "elapsed": "1778497691.361",
+      "action": "observe:otp",
+      "stage": "otp",
+      "title": "检查你的收件箱 - OpenAI",
+      "url": "https://auth.openai.com/email-verification",
+      "body": "检查你的收件箱 输入我们刚刚向 AdelineSanborn1423@hotmail.com 发送的验证码 验证码 继续 重新发送电子邮件 使用条款隐私政策"
+    },
+    {
+      "elapsed": "1778497691.515",
+      "action": "wait_manual_otp",
+      "stage": "otp",
+      "title": "检查你的收件箱 - OpenAI",
+      "url": "https://auth.openai.com/email-verification",
+      "body": "检查你的收件箱 输入我们刚刚向 AdelineSanborn1423@hotmail.com 发送的验证码 验证码 继续 重新发送电子邮件 使用条款隐私政策"
+    },
+    {
+      "elapsed": "1778497713.996",
+      "action": "observe:unknown",
+      "stage": "unknown",
+      "title": "检查你的收件箱 - OpenAI",
+      "url": "https://auth.openai.com/email-verification",
+      "body": "检查你的收件箱 输入我们刚刚向 AdelineSanborn1423@hotmail.com 发送的验证码 验证码 继续 重新发送电子邮件 使用条款隐私政策"
+    },
+    {
+      "elapsed": "1778497715.190",
+      "action": "observe:consent",
+      "stage": "consent",
+      "title": "使用 ChatGPT 登录到 Codex - OpenAI",
+      "url": "https://auth.openai.com/sign-in-with-chatgpt/codex/consent",
+      "body": "使用 ChatGPT 登录到 Codex AdelineSanborn1423@hotmail.com 继续操作后，ChatGPT 将向 Codex 提供你的姓名、电子邮件地址和个人资料头像以关联你的帐户。 Codex 不会收到你的聊天历史记录。 在你使用 Codex 时： 该功能由你的 ChatGPT 帐户提供支持，并使用你当前套餐的速率限制、训练及语言偏好设置。 ChatGPT 使用条款和隐私政策（或适用于 ChatGPT Ente"
+    },
+    {
+      "elapsed": "1778497727.916",
+      "action": "observe:callback",
+      "stage": "callback",
+      "title": "localhost",
+      "url": "http://localhost:1455/auth/callback?code=ac_mIGThqkFw5s7Is6g0PbIYugtCg8Lvu5hUExOQoeGaSE.TsSACGXawbNyCbqVR2EyDJ8GURRcVVHRt70ZlKBplq4&scope=openid+profile+email+offline_access&state=522af7a73c9dd82031017e8c2f2d0172e5a046b2ad1bb401fc959e8ef5d49914",
+      "body": "无法访问此网站 localhost 拒绝了我们的连接请求。 请试试以下办法： 检查网络连接 检查代理服务器和防火墙 ERR_CONNECTION_REFUSED 重新加载 详情"
+    }
+  ],
+  "network_events": [
+    {
+      "kind": "request",
+      "requestId": "A921C9504B4DC95D4CF47B6A41712146",
+      "method": "GET",
+      "url": "https://auth.openai.com/oauth/authorize?client_id=app_EMoamEEZ73f0CkXaXp7hrann&code_challenge=45LRcvzT7_eHXAW_4fhVl8AASfJoVHapprxFbKqcy1U&code_challenge_method=S256&codex_cli_simplified_flow=true&id_token_add_organizations=true&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&response_ty"
+    },
+    {
+      "kind": "request",
+      "requestId": "A921C9504B4DC95D4CF47B6A41712146",
+      "method": "GET",
+      "url": "https://auth.openai.com/api/oauth/oauth2/auth?client_id=app_EMoamEEZ73f0CkXaXp7hrann&code_challenge=45LRcvzT7_eHXAW_4fhVl8AASfJoVHapprxFbKqcy1U&code_challenge_method=S256&codex_cli_simplified_flow=true&id_token_add_organizations=true&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&respo"
+    },
+    {
+      "kind": "request",
+      "requestId": "A921C9504B4DC95D4CF47B6A41712146",
+      "method": "GET",
+      "url": "https://auth.openai.com/api/accounts/login?login_challenge=mulwgt6WUmrRAjN9SbWDPMU-3gDxOwpEjUdB4EkDli6dtLfs6qIjshut5cMWfds_ht7g7h5QLPbLILIm0D04K-eenbj4s9BCHnTsGfvpi4nPiKlZcd6i87XaKu8pZBQv4EsYuQUR5U3__1Clize84x5gen2YSXiNbObsAga7wq0MD87XYvUxI-Eszxtp6wQ2Sess2iikaZmVxh8kQykEfCB4Ua8-qomiAcYdyEI6wBwzu4HPN"
+    },
+    {
+      "kind": "request",
+      "requestId": "A921C9504B4DC95D4CF47B6A41712146",
+      "method": "GET",
+      "url": "https://auth.openai.com/log-in"
+    },
+    {
+      "kind": "response",
+      "requestId": "A921C9504B4DC95D4CF47B6A41712146",
+      "status": 200,
+      "url": "https://auth.openai.com/log-in",
+      "mimeType": "text/html"
+    },
+    {
+      "kind": "request",
+      "requestId": "30740.62",
+      "method": "GET",
+      "url": "https://auth.openai.com/cdn-cgi/challenge-platform/scripts/jsd/main.js"
+    },
+    {
+      "kind": "request",
+      "requestId": "30740.62",
+      "method": "GET",
+      "url": "https://auth.openai.com/cdn-cgi/challenge-platform/h/g/scripts/jsd/fe6331af5207/main.js?"
+    },
+    {
+      "kind": "response",
+      "requestId": "30740.62",
+      "status": 200,
+      "url": "https://auth.openai.com/cdn-cgi/challenge-platform/h/g/scripts/jsd/fe6331af5207/main.js?",
+      "mimeType": "application/javascript"
+    },
+    {
+      "kind": "request",
+      "requestId": "30740.63",
+      "method": "POST",
+      "url": "https://auth.openai.com/cdn-cgi/challenge-platform/h/g/jsd/oneshot/fe6331af5207/0.23836461051999636:1778495337:himQDLOIitRSFIXnV254VGKCqi3do3pFvrU0V0etVlU/9fa0b94769058ace"
+    },
+    {
+      "kind": "response",
+      "requestId": "30740.63",
+      "status": 200,
+      "url": "https://auth.openai.com/cdn-cgi/challenge-platform/h/g/jsd/oneshot/fe6331af5207/0.23836461051999636:1778495337:himQDLOIitRSFIXnV254VGKCqi3do3pFvrU0V0etVlU/9fa0b94769058ace",
+      "mimeType": "text/plain"
+    },
+    {
+      "kind": "request",
+      "requestId": "C00FB6E18E7789A1CD03631AC8713554",
+      "method": "GET",
+      "url": "blob:https://auth.openai.com/65089229-027a-4ef2-adbf-6b71f4d27594"
+    },
+    {
+      "kind": "request",
+      "requestId": "30740.125",
+      "method": "POST",
+      "url": "https://auth.openai.com/api/accounts/authorize/continue"
+    },
+    {
+      "kind": "response",
+      "requestId": "30740.125",
+      "status": 200,
+      "url": "https://auth.openai.com/api/accounts/authorize/continue",
+      "mimeType": "application/json"
+    },
+    {
+      "kind": "request",
+      "requestId": "30740.146",
+      "method": "GET",
+      "url": "https://auth.openai.com/api/accounts/client_auth_session_dump"
+    },
+    {
+      "kind": "response",
+      "requestId": "30740.146",
+      "status": 200,
+      "url": "https://auth.openai.com/api/accounts/client_auth_session_dump",
+      "mimeType": "application/json"
+    },
+    {
+      "kind": "request",
+      "requestId": "30740.207",
+      "method": "POST",
+      "url": "https://auth.openai.com/api/accounts/email-otp/validate"
+    },
+    {
+      "kind": "response",
+      "requestId": "30740.207",
+      "status": 200,
+      "url": "https://auth.openai.com/api/accounts/email-otp/validate",
+      "mimeType": "application/json"
+    },
+    {
+      "kind": "request",
+      "requestId": "30740.213",
+      "method": "GET",
+      "url": "https://auth.openai.com/api/accounts/client_auth_session_dump"
+    },
+    {
+      "kind": "response",
+      "requestId": "30740.213",
+      "status": 200,
+      "url": "https://auth.openai.com/api/accounts/client_auth_session_dump",
+      "mimeType": "application/json"
+    },
+    {
+      "kind": "request",
+      "requestId": "30740.220",
+      "method": "POST",
+      "url": "https://auth.openai.com/api/accounts/workspace/select"
+    },
+    {
+      "kind": "response",
+      "requestId": "30740.220",
+      "status": 200,
+      "url": "https://auth.openai.com/api/accounts/workspace/select",
+      "mimeType": "application/json"
+    },
+    {
+      "kind": "request",
+      "requestId": "970A2DF84107615301884C2F74F701BF",
+      "method": "GET",
+      "url": "https://auth.openai.com/api/oauth/oauth2/auth?client_id=app_EMoamEEZ73f0CkXaXp7hrann&code_challenge=45LRcvzT7_eHXAW_4fhVl8AASfJoVHapprxFbKqcy1U&code_challenge_method=S256&codex_cli_simplified_flow=true&id_token_add_organizations=true&login_verifier=hcrNgUqxRqp7PTO0j4hEpsslZNHxFBoTEsFmVI6MHjBIP9JeBw1"
+    },
+    {
+      "kind": "request",
+      "requestId": "970A2DF84107615301884C2F74F701BF",
+      "method": "GET",
+      "url": "https://auth.openai.com/api/accounts/consent?consent_challenge=mC81G1BSQumXG5xusVjyZbTmATiAA8tWBRrwpKP2GXYDSOU6HBtgK50-lmlrQZAWIzq5hWYFS4Xjo-duqhOo45on1McXTLjCDCglJmm4tqwkOBB7BjbxPJn1JKlwEt-mhTh1P7pq8Px5XtnOys0TbbX5GXGW_KkzgUHvZMu8L96MfQwDTOCEHJiRjQWV_rbThaNEUbhpQaaUW3Qo_aLEiRhsrWANRMvHf4VGrQh90VbVJ"
+    },
+    {
+      "kind": "request",
+      "requestId": "970A2DF84107615301884C2F74F701BF",
+      "method": "GET",
+      "url": "https://auth.openai.com/api/oauth/oauth2/auth?client_id=app_EMoamEEZ73f0CkXaXp7hrann&code_challenge=45LRcvzT7_eHXAW_4fhVl8AASfJoVHapprxFbKqcy1U&code_challenge_method=S256&codex_cli_simplified_flow=true&consent_verifier=7MNEThGFsRLb7BEeWMDtCOrkhonBI9YRd9US_uZjddW5eFcfa3wBZJl07MziMwKH-nXD3KQGbPL1R-GpM"
+    },
+    {
+      "kind": "request",
+      "requestId": "970A2DF84107615301884C2F74F701BF",
+      "method": "GET",
+      "url": "http://localhost:1455/auth/callback?code=ac_mIGThqkFw5s7Is6g0PbIYugtCg8Lvu5hUExOQoeGaSE.TsSACGXawbNyCbqVR2EyDJ8GURRcVVHRt70ZlKBplq4&scope=openid+profile+email+offline_access&state=522af7a73c9dd82031017e8c2f2d0172e5a046b2ad1bb401fc959e8ef5d49914"
+    }
+  ],
+  "controls": [
+    {
+      "tag": "a",
+      "type": "",
+      "name": "",
+      "aria": "",
+      "placeholder": "",
+      "text": "检查代理服务器和防火墙",
+      "href": "chrome-error://chromewebdata/#buttons"
+    },
+    {
+      "tag": "button",
+      "type": "submit",
+      "name": "",
+      "aria": "",
+      "placeholder": "",
+      "text": "重新加载",
+      "href": ""
+    },
+    {
+      "tag": "button",
+      "type": "submit",
+      "name": "",
+      "aria": "",
+      "placeholder": "",
+      "text": "详情",
+      "href": ""
+    }
+  ]
+}

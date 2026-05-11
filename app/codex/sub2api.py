@@ -75,6 +75,10 @@ class Sub2ApiUploader:
         self.logger = logger
         self._auth_lock = threading.Lock()
         self._bearer_holder = [str(config.bearer or "").strip()]
+        self._bearer_provider: Optional[Callable[[bool], str]] = None
+
+    def set_bearer_provider(self, provider: Callable[[bool], str]) -> None:
+        self._bearer_provider = provider
 
     @staticmethod
     def _decode_jwt_payload(token: str) -> Dict[str, Any]:
@@ -358,16 +362,24 @@ class Sub2ApiUploader:
             tuple[int, str, Optional[Dict[str, Any]]]: 请求结果
             AI by zb
         """
-        bearer = self._bearer_holder[0]
+        bearer = self._bearer_provider(False) if self._bearer_provider else self._bearer_holder[0]
+        if bearer:
+            self._bearer_holder[0] = bearer
         status_code, body, response_data = request_func(self._build_headers(bearer))
 
-        if status_code == 401 and self.config.email and self.config.password:
-            with self._auth_lock:
-                if self._bearer_holder[0] == bearer:
-                    new_token = self.login()
-                    if new_token:
-                        self._bearer_holder[0] = new_token
-            status_code, body, response_data = request_func(self._build_headers(self._bearer_holder[0]))
+        if status_code == 401:
+            if self._bearer_provider:
+                new_token = self._bearer_provider(True)
+                if new_token:
+                    self._bearer_holder[0] = new_token
+                    return request_func(self._build_headers(new_token))
+            if self.config.email and self.config.password:
+                with self._auth_lock:
+                    if self._bearer_holder[0] == bearer:
+                        new_token = self.login()
+                        if new_token:
+                            self._bearer_holder[0] = new_token
+                status_code, body, response_data = request_func(self._build_headers(self._bearer_holder[0]))
 
         return status_code, body, response_data
 

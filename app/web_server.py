@@ -11,6 +11,7 @@ import re
 import secrets
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from flask import Flask, Response, jsonify, redirect, request, session, url_for
 
 # 导入业务逻辑
@@ -22,6 +23,8 @@ import app.plus_activation_api as plus_activation_api
 import app.plus_binding as plus_binding
 import app.account_actions as account_actions
 import app.login_sub2api as login_sub2api
+from app.codex.sub2api import Sub2ApiConfig, Sub2ApiUploader
+from app.codex.runtime import create_session
 from app.account_store import build_account_dashboard_stats, count_account_records, query_account_records, upsert_account_record
 from app.config import cfg, select_activation_api_base_url, update_automation_settings
 from app.utils import get_account_record, parse_account_record, sanitize_account_record_for_web
@@ -214,6 +217,94 @@ class AppState:
             return self.frame_version
 
 state = AppState()
+
+
+class JoiniAdminAuthCache:
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.access_token = ""
+        self.expires_at = 0.0
+        self.last_error = ""
+        self.last_login_at = 0.0
+
+    def _build_config(self) -> Sub2ApiConfig:
+        return Sub2ApiConfig(
+            base_url=str(getattr(cfg.sub2api, "base_url", "") or "").strip().rstrip("/"),
+            bearer=str(getattr(cfg.sub2api, "bearer", "") or "").strip(),
+            email=str(getattr(cfg.sub2api, "email", "") or "").strip(),
+            password=str(getattr(cfg.sub2api, "password", "") or "").strip(),
+        )
+
+    def get_token(self, force: bool = False) -> str:
+        now = time.time()
+        with self.lock:
+            if not force and self.access_token and now < self.expires_at - 60:
+                return self.access_token
+
+        config = self._build_config()
+        if not config.base_url:
+            with self.lock:
+                self.access_token = ""
+                self.expires_at = 0.0
+                self.last_login_at = time.time()
+                self.last_error = "sub2api.base_url 未配置"
+            return ""
+        token = str(config.bearer or "").strip()
+        if not token:
+            uploader = Sub2ApiUploader(create_session(), config, logging.getLogger("sub2api"))
+            token = uploader.login()
+
+        with self.lock:
+            self.last_login_at = time.time()
+            if token:
+                self.access_token = token
+                self.expires_at = self.last_login_at + 23 * 60 * 60
+                self.last_error = ""
+                return self.access_token
+            self.access_token = ""
+            self.expires_at = 0.0
+            self.last_error = "sub2api 后台登录失败"
+            return ""
+
+    def warmup(self) -> bool:
+        return bool(self.get_token(force=True))
+
+    def build_headers(self, force_refresh: bool = False) -> dict[str, str]:
+        token = self.get_token(force=force_refresh)
+        headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        return headers
+
+    def snapshot(self) -> dict[str, Any]:
+        with self.lock:
+            return {
+                "authenticated": bool(self.access_token),
+                "expiresAt": int(self.expires_at) if self.expires_at else 0,
+                "lastLoginAt": int(self.last_login_at) if self.last_login_at else 0,
+                "lastError": self.last_error,
+                "baseUrl": self._build_config().base_url,
+            }
+
+
+joini_admin_auth = JoiniAdminAuthCache()
+
+
+def get_cached_sub2api_bearer(force_refresh: bool = False) -> str:
+    return joini_admin_auth.get_token(force=force_refresh)
+
+
+def warmup_joini_admin_auth() -> None:
+    print("🔐 正在预热 sub2api 后台登录缓存...")
+    ok = joini_admin_auth.warmup()
+    snapshot = joini_admin_auth.snapshot()
+    base_url = snapshot.get("baseUrl") or "sub2api"
+    if ok:
+        expires_at = snapshot.get("expiresAt") or 0
+        expires_text = datetime.fromtimestamp(expires_at).strftime("%Y-%m-%d %H:%M:%S") if expires_at else "未知"
+        print(f"✅ sub2api 后台登录预热成功 | base_url={base_url} | expires_at={expires_text}")
+    else:
+        print(f"⚠️ sub2api 后台登录预热失败 | base_url={base_url} | error={snapshot.get('lastError') or '未知错误'}")
 
 
 class ManualOtpBroker:
@@ -1860,6 +1951,18 @@ def cancel_login_otp():
     return jsonify({"success": accepted, "message": message, **manual_otp_broker.get_status(email)}), status_code
 
 
+@app.route('/api/joini/auth/status', methods=['GET'])
+def get_joini_auth_status():
+    return jsonify({"success": True, **joini_admin_auth.snapshot()})
+
+
+@app.route('/api/joini/auth/refresh', methods=['POST'])
+def refresh_joini_auth():
+    ok = joini_admin_auth.warmup()
+    status_code = 200 if ok else 500
+    return jsonify({"success": ok, **joini_admin_auth.snapshot()}), status_code
+
+
 @app.route('/api/accounts/login-sub2api', methods=['POST'])
 def login_account_sub2api():
     """
@@ -1966,6 +2069,8 @@ def start_web_server(port: int = 5000, activation_api_index: int | None = None) 
         print(f"🔌 activation_api 已切换到索引 {selected_index}: {selected_base_url}")
     else:
         print(f"⚠️ activation_api 索引 {activation_api_index} 不存在，已回退到索引 {selected_index}: {selected_base_url}")
+
+    warmup_joini_admin_auth()
 
     print(f"🌐 Web Server started at http://localhost:{port}")
     # 使用生产级服务器 Waitress
