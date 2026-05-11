@@ -1255,6 +1255,7 @@ def perform_http_oauth_login(
     otp_mode: str = "auto",
     mailbox_context: str = "",
     otp_provider: Optional[Callable[[str, int, logging.Logger], Optional[str]]] = None,
+    otp_wait_timeout: int = 60,
     oauth_issuer: str = OPENAI_AUTH_BASE,
     oauth_client_id: str = OAUTH_CLIENT_ID,
     oauth_redirect_uri: str = OAUTH_REDIRECT_URI,
@@ -1270,6 +1271,7 @@ def perform_http_oauth_login(
         otp_mode: OTP 模式，auto 或 manual
         mailbox_context: 邮箱上下文
         otp_provider: 可选手填验证码提供器
+        otp_wait_timeout: 自动轮询邮箱验证码的等待时长
         oauth_issuer: OAuth 服务根地址
         oauth_client_id: 客户端 ID
         oauth_redirect_uri: 回调地址
@@ -1283,6 +1285,7 @@ def perform_http_oauth_login(
     session = create_session(proxy=proxy)
     device_id = str(uuid.uuid4())
     resolved_mailbox_context = resolve_mailbox_context(email, mailbox_context)
+    effective_otp_wait_timeout = max(int(otp_wait_timeout or 60), 1)
     normalized_password = str(password or "").strip()
     passwordless_login = not normalized_password
 
@@ -1473,7 +1476,7 @@ def perform_http_oauth_login(
                 email=email,
                 mailbox_context=resolved_mailbox_context,
                 since_marker=mailbox_marker,
-                timeout=60,
+                timeout=effective_otp_wait_timeout,
                 logger=active_logger,
             )
             if not otp_code:
@@ -1482,7 +1485,7 @@ def perform_http_oauth_login(
                     email=email,
                     mailbox_context=resolved_mailbox_context,
                     since_marker=mailbox_marker,
-                    timeout=60,
+                    timeout=effective_otp_wait_timeout,
                     logger=active_logger,
                 )
 
@@ -2009,12 +2012,15 @@ def run_codex_login(
     active_logger = logger or get_logger()
     config = load_runtime_config(config_path)
     effective_proxy = resolve_proxy(config, proxy)
+    email_config = config.get("email") or {}
+    otp_wait_timeout = int(email_config.get("wait_timeout") or 60)
 
     tokens = perform_http_oauth_login(
         email=email,
         password=password,
         proxy=effective_proxy,
         otp_mode=otp_mode,
+        otp_wait_timeout=otp_wait_timeout,
         logger=active_logger,
     )
     if not tokens:

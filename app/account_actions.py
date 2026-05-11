@@ -1062,6 +1062,7 @@ def run_sub2api_upload_for_account(email: str) -> Sub2ApiUploadResult:
         return Sub2ApiUploadResult(success=False, stage="token", message="账号未保存可用密码，无法获取 OAuth 三件套")
 
     mailbox_context = str(account.get("mailboxContext") or "").strip()
+    otp_wait_timeout = int(getattr(cfg.email, "wait_timeout", 60) or 60)
     print(f"🔐 开始走原始 Codex OAuth 逻辑获取三件套: {email}")
     effective_proxy = resolve_proxy(config, "")
     tokens = perform_http_oauth_login(
@@ -1070,6 +1071,7 @@ def run_sub2api_upload_for_account(email: str) -> Sub2ApiUploadResult:
         proxy=effective_proxy,
         otp_mode="auto",
         mailbox_context=mailbox_context,
+        otp_wait_timeout=otp_wait_timeout,
         logger=logger,
     )
     if not tokens:

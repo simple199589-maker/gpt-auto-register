@@ -520,6 +520,7 @@ def login_and_upload_account(
     logger = get_logger("login-sub2api")
     effective_proxy = resolve_proxy(config, proxy)
     mailbox_context = str(account.get("mailboxContext") or "").strip()
+    otp_wait_timeout = int(getattr(cfg.email, "wait_timeout", 60) or 60)
     normalized_otp_mode = str(otp_mode or "auto").strip().lower()
     if normalized_otp_mode not in {"auto", "manual"}:
         normalized_otp_mode = "auto"
@@ -531,6 +532,7 @@ def login_and_upload_account(
         otp_mode=normalized_otp_mode,
         mailbox_context=mailbox_context,
         otp_provider=otp_provider,
+        otp_wait_timeout=otp_wait_timeout,
         logger=logger,
     )
     if not tokens:
