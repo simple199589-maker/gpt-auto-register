@@ -206,6 +206,30 @@ class CodexManualOtpFlowTests(unittest.TestCase):
         self.assertEqual(validate_calls[0]["json"], {"code": "123456"})
         self.assertTrue(validate_calls[0]["headers"].get("oai-device-id"))
 
+    def test_manual_otp_uses_configured_wait_timeout(self) -> None:
+        fake_session = FakeSession()
+        otp_provider = Mock(return_value="123456")
+        from app.codex import _runtime_impl
+
+        with patch.object(_runtime_impl, "create_session", return_value=fake_session), patch.object(
+            _runtime_impl,
+            "build_sentinel_token",
+            return_value="sentinel-token",
+        ), patch.object(
+            _runtime_impl,
+            "_exchange_code_for_token",
+            return_value={"access_token": "access-token", "refresh_token": "refresh-token", "id_token": "id-token"},
+        ):
+            _runtime_impl.perform_http_oauth_login(
+                email="thirdparty@example.com",
+                password="secret-pass",
+                otp_mode="manual",
+                otp_provider=otp_provider,
+                otp_wait_timeout=137,
+            )
+
+        self.assertEqual(otp_provider.call_args.args[1], 137)
+
     def test_step_b_passwordless_otp_skips_password_verify(self) -> None:
         """Step B 已进入 passwordless OTP 时不应继续提交密码。AI by zb"""
         fake_session = FakeSession(

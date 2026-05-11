@@ -18,6 +18,7 @@ from app.codex.runtime import (
     get_logger,
     load_runtime_config,
     perform_http_oauth_login,
+    resolve_email_wait_timeout,
     resolve_proxy,
     save_token_payload,
     upload_to_sub2api,
@@ -1062,7 +1063,7 @@ def run_sub2api_upload_for_account(email: str) -> Sub2ApiUploadResult:
         return Sub2ApiUploadResult(success=False, stage="token", message="账号未保存可用密码，无法获取 OAuth 三件套")
 
     mailbox_context = str(account.get("mailboxContext") or "").strip()
-    otp_wait_timeout = int(getattr(cfg.email, "wait_timeout", 60) or 60)
+    otp_wait_timeout = resolve_email_wait_timeout(config, default=int(getattr(cfg.email, "wait_timeout", 60) or 60))
     print(f"🔐 开始走原始 Codex OAuth 逻辑获取三件套: {email}")
     effective_proxy = resolve_proxy(config, "")
     tokens = perform_http_oauth_login(

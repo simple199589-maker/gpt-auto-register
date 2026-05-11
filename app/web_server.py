@@ -353,7 +353,7 @@ class ManualOtpBroker:
             AI by zb
         """
         normalized_email = self._normalize_email(email)
-        deadline = time.time() + max(int(timeout or 300), 30)
+        deadline = time.time() + max(int(timeout or 60), 1)
         if not normalized_email:
             return ""
         with self._condition:

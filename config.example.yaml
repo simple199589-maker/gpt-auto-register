@@ -30,7 +30,7 @@ email:
   prefix_length: 10
   
   # 验证邮件相关
-  wait_timeout: 120     # 等待验证邮件的最大超时时间(秒)
+  wait_timeout: 300     # 等待验证邮件的最大超时时间(秒)
   poll_interval: 3      # 轮询检查邮件的间隔(秒)
   
   # Worker 的访问密码 (必须修改)
@@ -45,7 +45,7 @@ outlook:
   batch_code: ""
   domain: "outlook.com"
   refresh: true
-  wait_timeout: 120
+  wait_timeout: 300
   poll_interval: 3
 
 # 浏览器自动化配置

@@ -209,6 +209,28 @@ def load_runtime_config(config_path: str = "") -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def resolve_email_wait_timeout(config: Optional[Dict[str, Any]] = None, default: int = 60) -> int:
+    """
+    从运行配置中解析邮箱验证码等待秒数。
+
+    参数:
+        config: 运行配置字典
+        default: 默认等待秒数
+    返回:
+        int: 等待秒数
+        AI by zb
+    """
+    raw_value: Any = default
+    if isinstance(config, dict):
+        email_config = config.get("email") or {}
+        if isinstance(email_config, dict):
+            raw_value = email_config.get("wait_timeout", raw_value)
+    try:
+        return max(int(raw_value or default), 1)
+    except (TypeError, ValueError):
+        return max(int(default or 60), 1)
+
+
 def resolve_proxy(config: Dict[str, Any], override_proxy: str = "") -> str:
     """
     解析最终代理地址。
@@ -638,7 +660,7 @@ def create_mailbox_marker_with_skew(skew_seconds: int = 30) -> int:
 def prompt_for_email_otp(
     email: str,
     logger: Optional[logging.Logger] = None,
-    timeout: int = 300,
+    timeout: Optional[int] = None,
 ) -> Optional[str]:
     """
     提示用户手动输入邮箱验证码。
@@ -651,7 +673,8 @@ def prompt_for_email_otp(
         Optional[str]: 6 位验证码
         AI by zb
     """
-    deadline = time.time() + max(timeout, 30)
+    effective_timeout = resolve_email_wait_timeout({"email": {"wait_timeout": timeout}}, default=60)
+    deadline = time.time() + effective_timeout
     active_logger = logger or get_logger()
 
     while time.time() < deadline:
@@ -1323,11 +1346,9 @@ def perform_http_oauth_login(
     session = create_session(proxy=proxy)
     device_id = str(uuid.uuid4())
     resolved_mailbox_context = resolve_mailbox_context(email, mailbox_context)
-    effective_otp_wait_timeout = max(int(otp_wait_timeout or 60), 1)
+    effective_otp_wait_timeout = resolve_email_wait_timeout({"email": {"wait_timeout": otp_wait_timeout}}, default=60)
     normalized_password = str(password or "").strip()
     passwordless_login = not normalized_password
-    if passwordless_login and str(otp_mode or "").strip().lower() == "auto":
-        effective_otp_wait_timeout = max(effective_otp_wait_timeout, 300)
 
     session.cookies.set("oai-did", device_id, domain=".auth.openai.com")
     session.cookies.set("oai-did", device_id, domain="auth.openai.com")
@@ -1563,14 +1584,14 @@ def perform_http_oauth_login(
                 try:
                     otp_code = otp_provider(
                         email,
-                        300,
+                        effective_otp_wait_timeout,
                         active_logger,
                         resend_callback=resend_manual_otp,
                     )
                 except TypeError:
-                    otp_code = otp_provider(email, 300, active_logger)
+                    otp_code = otp_provider(email, effective_otp_wait_timeout, active_logger)
             else:
-                otp_code = prompt_for_email_otp(email=email, logger=active_logger, timeout=300)
+                otp_code = prompt_for_email_otp(email=email, logger=active_logger, timeout=effective_otp_wait_timeout)
         if not otp_code:
             return fail_oauth_login("未获取到邮箱验证码", active_logger, email)
 
@@ -2121,8 +2142,7 @@ def run_codex_login(
     active_logger = logger or get_logger()
     config = load_runtime_config(config_path)
     effective_proxy = resolve_proxy(config, proxy)
-    email_config = config.get("email") or {}
-    otp_wait_timeout = int(email_config.get("wait_timeout") or 60)
+    otp_wait_timeout = resolve_email_wait_timeout(config, default=60)
 
     tokens = perform_http_oauth_login(
         email=email,

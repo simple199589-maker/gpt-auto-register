@@ -649,9 +649,9 @@ class ConfigLoader:
                     email.get('domainIndex', self.config.email.domain_index),
                     list(self.config.email.domain_index or []),
                 ),
-                prefix_length=email.get('prefix_length', self.config.email.prefix_length),
-                wait_timeout=email.get('wait_timeout', self.config.email.wait_timeout),
-                poll_interval=email.get('poll_interval', self.config.email.poll_interval),
+                prefix_length=_parse_positive_int(email.get('prefix_length', self.config.email.prefix_length), self.config.email.prefix_length),
+                wait_timeout=_parse_positive_int(email.get('wait_timeout', self.config.email.wait_timeout), self.config.email.wait_timeout),
+                poll_interval=_parse_positive_int(email.get('poll_interval', self.config.email.poll_interval), self.config.email.poll_interval),
                 admin_password=email.get('admin_password', self.config.email.admin_password)
             )
 
