@@ -133,19 +133,6 @@
                             </div>
                         </template>
 
-                        <div class="setting-block">
-                            <div class="setting-copy">
-                                <div class="setting-title">Sub2Api 自动上传</div>
-                                <div class="setting-desc">登录成功后自动提交到 Sub2Api</div>
-                            </div>
-                            <a-switch
-                                v-model:checked="settings.sub2api_auto_upload_enabled"
-                                :disabled="isRunning || settingsSaving"
-                                :loading="settingsSaving"
-                                @change="saveAutomationSettings"
-                            ></a-switch>
-                        </div>
-
                         <div class="setting-field">
                             <div class="setting-copy">
                                 <div class="setting-title">Sub2Api 分组</div>
@@ -324,19 +311,6 @@
                         </div>
                     </template>
 
-                    <div class="setting-block">
-                        <div class="setting-copy">
-                            <div class="setting-title">Sub2Api 自动上传</div>
-                            <div class="setting-desc">登录成功后自动提交到 Sub2Api</div>
-                        </div>
-                        <a-switch
-                            v-model:checked="settings.sub2api_auto_upload_enabled"
-                            :disabled="isRunning || settingsSaving"
-                            :loading="settingsSaving"
-                            @change="saveAutomationSettings"
-                        ></a-switch>
-                    </div>
-
                     <div class="setting-field">
                         <div class="setting-copy">
                             <div class="setting-title">Sub2Api 分组</div>
@@ -425,9 +399,6 @@
 
                         <div class="topbar-tags">
                             <a-tag v-if="currentTab === 'accounts'" color="blue">账号数 {{ accountPagination.total }}</a-tag>
-                            <a-tag v-if="currentTab === 'accounts'" :color="settings.sub2api_auto_upload_enabled ? 'cyan' : 'default'">
-                                Sub2Api {{ settings.sub2api_auto_upload_enabled ? 'ON' : 'OFF' }}
-                            </a-tag>
                             <a
                                 class="topbar-link-tag"
                                 href="https://team.joini.cloud/admin/"

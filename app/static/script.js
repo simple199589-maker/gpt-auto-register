@@ -263,14 +263,12 @@ const app = createApp({
             otpCode: ''
         })
         const serverSettings = reactive({
-            sub2api_auto_upload_enabled: false,
             sub2api_group_ids: [],
             proxy_enabled: false,
             proxy_host: '',
             proxy_port: 0
         })
         const settings = reactive({
-            sub2api_auto_upload_enabled: false,
             sub2api_group_ids: [],
             sub2api_group_ids_text: '',
             proxy_enabled: false,
@@ -331,7 +329,6 @@ const app = createApp({
         }
 
         function syncSettings(data) {
-            serverSettings.sub2api_auto_upload_enabled = Boolean(data && data.sub2api_auto_upload_enabled)
             serverSettings.sub2api_group_ids = Array.isArray(data && data.sub2api_group_ids)
                 ? data.sub2api_group_ids.map((item) => Number(item)).filter((item) => Number.isInteger(item))
                 : []
@@ -340,7 +337,6 @@ const app = createApp({
             serverSettings.proxy_port = Number(data && data.proxy_port || 0)
 
             if (!settingsSaving.value) {
-                settings.sub2api_auto_upload_enabled = serverSettings.sub2api_auto_upload_enabled
                 settings.sub2api_group_ids = [...serverSettings.sub2api_group_ids]
                 settings.proxy_enabled = serverSettings.proxy_enabled
                 settings.proxy_host = serverSettings.proxy_host
@@ -367,7 +363,6 @@ const app = createApp({
         }
 
         function restoreSettingsFromServer() {
-            settings.sub2api_auto_upload_enabled = serverSettings.sub2api_auto_upload_enabled
             settings.sub2api_group_ids = [...serverSettings.sub2api_group_ids]
             settings.sub2api_group_ids_text = serverSettings.sub2api_group_ids.join(',')
             settings.proxy_enabled = serverSettings.proxy_enabled
@@ -492,7 +487,6 @@ const app = createApp({
                 const proxyHost = String(settings.proxy_host || '').trim()
                 const proxyPort = parseProxyPortInput(settings.proxy_port_text)
                 const payload = {
-                    sub2api_auto_upload_enabled: Boolean(settings.sub2api_auto_upload_enabled),
                     sub2api_group_ids: groupIds.length ? groupIds : [...serverSettings.sub2api_group_ids],
                     proxy_enabled: Boolean(settings.proxy_enabled),
                     proxy_host: proxyHost,

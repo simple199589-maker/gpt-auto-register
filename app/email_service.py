@@ -915,11 +915,13 @@ def wait_for_verification_email_with_marker(
 
                 code = extract_verification_code(subject)
                 if code:
+                    print(f"  ✅ 提取到验证码: {code}")
                     return code
 
                 if body:
                     code = extract_verification_code(body)
                     if code:
+                        print(f"  ✅ 提取到验证码: {code}")
                         return code
         
         # 显示等待进度

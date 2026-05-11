@@ -444,10 +444,8 @@ def extract_verification_code(content: str):
     for pattern in patterns:
         matches = re.findall(pattern, content, re.IGNORECASE)
         if matches:
-            code = matches[0]
-            print(f"  ✅ 提取到验证码: {code}")
-            return code
-    
+            return matches[0]
+
     return None
 
 

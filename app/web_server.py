@@ -696,7 +696,6 @@ def build_automation_settings_payload() -> dict:
     """
     return {
         "plus_auto_activate_enabled": bool(cfg.plus.auto_activate),
-        "sub2api_auto_upload_enabled": bool(cfg.sub2api.auto_upload_sub2api),
         "sub2api_group_ids": list(cfg.sub2api.group_ids or [2]),
         "proxy_enabled": bool(cfg.proxy.enabled),
         "proxy_host": str(cfg.proxy.host or ""),
@@ -1218,10 +1217,6 @@ def automation_settings():
         data.get("plus_auto_activate_enabled"),
         bool(cfg.plus.auto_activate),
     )
-    sub2api_auto_upload = coerce_bool(
-        data.get("sub2api_auto_upload_enabled"),
-        bool(cfg.sub2api.auto_upload_sub2api),
-    )
     raw_group_ids = data.get("sub2api_group_ids")
     if isinstance(raw_group_ids, list):
         sub2api_group_ids = [int(item) for item in raw_group_ids if str(item).strip().lstrip("-").isdigit()]
@@ -1236,7 +1231,6 @@ def automation_settings():
 
     update_automation_settings(
         plus_auto_activate=plus_auto_activate,
-        sub2api_auto_upload=sub2api_auto_upload,
         sub2api_group_ids=sub2api_group_ids or list(cfg.sub2api.group_ids or [2]),
         proxy_enabled=proxy_enabled,
         proxy_host=proxy_host,
